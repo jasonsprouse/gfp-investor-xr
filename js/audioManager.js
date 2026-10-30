@@ -177,7 +177,16 @@ export class AudioManager {
       try { this.ytPlayer.setVolume(this.volume); } catch(e){}
     }
     if (this.videoGain && this.audioCtx) {
-      this.videoGain.gain.setValueAtTime((this.volume / 100) * 0.9, this.audioCtx.currentTime);
+      this.videoGain.gain.setValueAtTime((this.volume / 100) * 0.9 * (this.ducked ? 0.18 : 1), this.audioCtx.currentTime);
+    }
+  }
+
+  // Lower the club music while a booth narration is playing
+  setDucked(ducked) {
+    this.ducked = !!ducked;
+    if (this.videoGain && this.audioCtx) {
+      const base = (this.volume / 100) * 0.9;
+      this.videoGain.gain.setTargetAtTime(this.ducked ? base * 0.18 : base, this.audioCtx.currentTime, 0.25);
     }
   }
 

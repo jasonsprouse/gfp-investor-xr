@@ -7,6 +7,7 @@ import { XRControllerManager } from './xrController.js';
 import { NPCManager } from './npcManager.js';
 import { VTOLManager } from './vtolManager.js';
 import { MobilityManager } from './mobilityManager.js';
+import { BoothManager } from './boothManager.js';
 
 class App {
   constructor() {
@@ -76,6 +77,12 @@ class App {
     this.npcManager = new NPCManager(this.scene);
     this.vtolManager = new VTOLManager(this.scene);
     this.mobilityManager = new MobilityManager(this.scene);
+    this.boothManager = new BoothManager(this.scene, {
+      onNarrationChange: (active) => this.audioManager.setDucked(active),
+      onOpenLink: (url) => this.openBoothLink(url),
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    this.boothManager.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
 
     // Register vehicle interactable hitboxes
     if (this.vtolManager.interactableObjects) {
@@ -144,6 +151,21 @@ class App {
         case 'KeyE':
           this.toggleVehicleBoarding();
           break;
+        case 'KeyZ':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('prev', this.dolly.position);
+          break;
+        case 'KeyX':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('toggle', this.dolly.position);
+          break;
+        case 'KeyC':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('next', this.dolly.position);
+          break;
+        case 'KeyV':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('auto', this.dolly.position);
+          break;
+        case 'KeyL':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('link', this.dolly.position);
+          break;
         case 'Space':
           if (this.playerState === 'VTOL_PILOT') {
             this.isAscending = true;
@@ -211,6 +233,10 @@ class App {
   }
 
   handleAction(action) {
+    if (typeof action === 'string' && action.startsWith('booth:')) {
+      if (this.boothManager) this.boothManager.handleAction(action, this.dolly.position);
+      return;
+    }
     if (action === 'play' || action === 'toggleVideo') {
       if (this.clubScene.isVideoPlaying) {
         this.clubScene.pauseVideo();
@@ -254,6 +280,15 @@ class App {
       }
     } else if (action === 'inspect_plinth') {
       this.showHUDNotification('GOOD FAITH PARADIGM INVESTOR PILLAR INSPECTED');
+    }
+  }
+
+  openBoothLink(url) {
+    if (!url) return;
+    if (this.renderer.xr.isPresenting) {
+      this.showHUDNotification('Link: ' + url.replace(/^https?:\/\//, ''));
+    } else {
+      window.open(url, '_blank', 'noopener');
     }
   }
 
@@ -568,6 +603,9 @@ class App {
       }
 
       // Update VTOL Flight & Ground Mobility
+      if (this.boothManager) {
+        this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
+      }
       if (this.vtolManager) {
         const vtolThrust = (this.moveForward || this.isAscending);
         this.vtolManager.updateFlight(delta, t, null, vtolThrust, null);
@@ -668,7 +706,14 @@ class App {
         hud.style.display = 'block';
         hud.innerHTML = `<span class="badge-icon">🚗</span> <strong>LAST-MILE POD READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO DRIVE</span>`;
       } else {
-        hud.style.display = 'none';
+        const booth = this.boothManager ? this.boothManager.getNearbyBooth(this.dolly.position, 7.5) : null;
+        if (booth) {
+          hud.style.display = 'block';
+          const hasNarr = booth.def.narration;
+          hud.innerHTML = `<span class="badge-icon">\u{1F4FD}</span> <strong>${booth.def.title}</strong> &bull; <span class="badge-action">${hasNarr ? '[X] NARRATE' : '[X] NEXT'} &nbsp;[Z] PREV &nbsp;[C] NEXT &nbsp;[L] OPEN LINK</span>`;
+        } else {
+          hud.style.display = 'none';
+        }
       }
     }
   }
