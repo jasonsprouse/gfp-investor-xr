@@ -13,7 +13,7 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  */
 export class DocentNPC {
   constructor(scene, npcManager, {
-    boothManager, relicPavilion, home = [-3.4, 30, 16.2], onVoiceChange, onNotify
+    boothManager, relicPavilion, home = [0, 30, 16.0], onVoiceChange, onNotify
   } = {}) {
     this.scene = scene;
     this.booths = boothManager;

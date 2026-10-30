@@ -542,8 +542,8 @@ class App {
       this.dolly.position.set(0, 30.0, 22.4);
       this.camera.lookAt(0, 31.3, 28.5);
     } else if (view === 'docent') {
-      this.dolly.position.set(-0.6, 30.0, 21.6);
-      this.camera.lookAt(-3.0, 31.3, 16.6);
+      this.dolly.position.set(0, 30.0, 20.6);
+      this.camera.lookAt(0.6, 31.3, 16.0);
     } else if (view === 'vtol') {
       this.handleAction('board_vtol');
     } else if (view === 'vertiport') {
