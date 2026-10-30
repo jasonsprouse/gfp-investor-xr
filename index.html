@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Good Faith Paradigm | XR Investor Pitch & Intermodal Aerotropolis</title>
+  
+  <!-- Visual Error Overlay for instant on-screen diagnostics -->
+  <script>
+    window.addEventListener('error', function(e) {
+      console.error(e);
+      var box = document.getElementById('debug-error-box');
+      if (box) {
+        box.style.display = 'block';
+        box.textContent += '⚠️ [Runtime Error] ' + (e.message || e) + '\nFile: ' + (e.filename || '') + ' : ' + (e.lineno || '') + '\n\n';
+      }
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error(e);
+      var box = document.getElementById('debug-error-box');
+      if (box) {
+        box.style.display = 'block';
+        box.textContent += '⚠️ [Promise Error] ' + (e.reason ? (e.reason.stack || e.reason) : e) + '\n\n';
+      }
+    });
+  </script>
+
+  <!-- Import Map to resolve bare 'three' and 'three/addons/' specifiers -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- On-Screen Diagnostics Banner (only shown if an error occurs) -->
+  <div id="debug-error-box" style="display:none; position:fixed; top:12px; left:12px; right:12px; max-height:40vh; overflow:auto; background:rgba(220,20,60,0.95); color:#fff; padding:16px; border-radius:10px; z-index:999999; font-family:Consolas,monospace; font-size:13px; line-height:1.5; border:2px solid #fff; box-shadow:0 0 25px rgba(255,0,0,0.8); user-select:text;">
+    <div style="font-weight:bold; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.4); padding-bottom:4px;">
+      SYSTEM DIAGNOSTICS LOG:
+    </div>
+  </div>
+
+  <!-- 3D Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Desktop First-Person Crosshair -->
+  <div id="reticle"></div>
+
+  <!-- In-Room WebGL/WebXR Cinema Video Stream Element -->
+  <video id="webxr-room-video" playsinline crossorigin="anonymous" style="display:none;"></video>
+
+  <!-- Live Music Video Screen (Hidden by default to keep 3D room cinema unobstructed) -->
+  <div id="stage-video-frame" class="video-mode-hidden">
+    <div class="video-screen-header">
+      <span class="video-badge"><i class="fas fa-circle" style="color:#ff007f; font-size:9px; margin-right:4px;"></i> LIVE STAGE FEED</span>
+      <span id="video-screen-title" class="video-title">Sanctuary of Sound • @GparadigmOrgLove</span>
+      <div class="video-header-actions">
+        <button id="btn-video-pip" class="btn-video-ctrl" title="Picture-in-Picture"><i class="fas fa-clone"></i></button>
+        <button id="btn-video-stage" class="btn-video-ctrl" title="Stage Screen"><i class="fas fa-tv"></i></button>
+        <button id="btn-video-hide" class="btn-video-ctrl" title="Hide Screen"><i class="fas fa-eye-slash"></i></button>
+      </div>
+    </div>
+    <div class="video-embed-wrapper">
+      <div id="yt-player"></div>
+    </div>
+  </div>
+
+  <!-- Cyberpunk Glassmorphism HUD -->
+  <div id="hud-overlay">
+    <!-- Top Bar -->
+    <header class="hud-header">
+      <div class="brand">
+        <div class="logo-badge">GFP PITCH XR</div>
+        <div class="brand-title">
+          <h1>INVESTOR DEMONSTRATION & AEROTROPOLIS</h1>
+          <a href="https://www.youtube.com/@GparadigmOrgLove" target="_blank" rel="noopener">
+            <i class="fab fa-youtube"></i> Good Faith Paradigm (@GparadigmOrgLove)
+          </a>
+        </div>
+      </div>
+      <div class="hud-actions">
+        <button id="btn-screen-source" class="btn-hud active" title="Switch 3D Screen between Cinema Video and Spectrum Visualizer">
+          <i class="fas fa-film"></i> 3D Screen: Video
+        </button>
+        <button id="btn-playlist-toggle" class="btn-hud" title="View all Good Faith Paradigm songs">
+          <i class="fas fa-list-ul"></i> Tracklist (<span id="track-count">13</span>)
+        </button>
+        <button id="btn-mode" class="btn-hud" title="Switch LED Screen Visualizer pattern">
+          <i class="fas fa-sliders-h"></i> Mode: Spectrum
+        </button>
+        <button id="btn-laser" class="btn-hud active" title="Toggle laser array">
+          <i class="fas fa-bolt"></i> Lasers
+        </button>
+        <button id="btn-strobe" class="btn-hud" title="Toggle strobe flashers">
+          <i class="fas fa-sun"></i> Strobes
+        </button>
+      </div>
+    </header>
+
+    <!-- Tracklist Modal Dropdown -->
+    <div id="playlist-drawer" class="playlist-drawer hidden">
+      <div class="playlist-header">
+        <h3>GOOD FAITH PARADIGM TRACKS</h3>
+        <button id="btn-close-playlist" class="btn-close">&times;</button>
+      </div>
+      <div id="playlist-items" class="playlist-items">
+        <!-- Injected via JavaScript -->
+      </div>
+    </div>
+
+    <!-- Bottom Controls & Presets -->
+    <div class="hud-bottom">
+      <!-- Media Player Card -->
+      <div class="player-card">
+        <div class="track-info">
+          <div class="track-thumbnail">
+            <img id="track-thumb-img" src="https://img.youtube.com/vi/A5P1PgpvS4Y/mqdefault.jpg" alt="Artwork">
+          </div>
+          <div class="track-texts">
+            <div id="track-badge" class="track-badge">Featured Track</div>
+            <div id="track-title" class="track-title">Sanctuary of Sound</div>
+            <div class="track-artist">Good Faith Paradigm • Official Audio</div>
+          </div>
+        </div>
+        <div class="player-controls">
+          <div class="playback-buttons">
+            <button id="btn-prev" class="btn-ctrl" title="Previous Track">
+              <i class="fas fa-backward-step"></i>
+            </button>
+            <button id="btn-play" class="btn-ctrl play-btn" title="Play / Pause">
+              <i class="fas fa-play"></i>
+            </button>
+            <button id="btn-next" class="btn-ctrl" title="Next Track">
+              <i class="fas fa-forward-step"></i>
+            </button>
+          </div>
+          <div class="volume-container">
+            <i class="fas fa-volume-high"></i>
+            <input type="range" id="volume-slider" class="volume-slider" min="0" max="100" value="80">
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Intermodal Teleport Presets -->
+      <div class="preset-panel">
+        <span><i class="fas fa-location-dot"></i> Intermodal Hubs</span>
+        <div class="preset-buttons">
+          <button class="btn-preset" data-view="skyport">Skyport Pitch</button>
+          <button class="btn-preset" data-view="vtol">eVTOL Cockpit</button>
+          <button class="btn-preset" data-view="vertiport">Vertiport Bravo</button>
+          <button class="btn-preset" data-view="rover">Last-Mile Pod</button>
+          <button class="btn-preset" data-view="floor">Paradigm Club</button>
+          <button class="btn-preset" data-view="amphi">Amphitheater</button>
+          <button class="btn-preset" data-view="showroom">Showroom</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instructions & Welcome Modal -->
+  <div id="instructions-modal">
+    <h2>GOOD FAITH PARADIGM &bull; INVESTOR DEMONSTRATION</h2>
+    <p>
+      An interactive executive demonstration featuring the vision of <strong>Good Faith Paradigm</strong> (<a href="https://www.youtube.com/@GparadigmOrgLove" target="_blank" style="color:#00f0ff;">@GparadigmOrgLove</a>): 
+      Sacred Sound synthesis, autonomous <strong>Urban Air Mobility (eVTOL)</strong>, and <strong>Last-Mile Electric Micro-Transit</strong> connecting to world-class entertainment venues.
+    </p>
+
+    <div class="instructions-grid">
+      <div class="inst-card">
+        <h4><i class="fas fa-vr-cardboard"></i> WebXR Mode (Quest / PC VR)</h4>
+        <ul>
+          <li><strong>Enter VR:</strong> Click the <strong>ENTER VR</strong> button below.</li>
+          <li><strong>Walk & Turn:</strong> Left stick walks; right stick snap-turns.</li>
+          <li><strong>Boarding:</strong> Aim laser & click trigger or press <kbd>A</kbd> near eVTOL or Rover.</li>
+          <li><strong>Vehicle Flight / Drive:</strong> Left stick accelerates/climbs; right stick steers.</li>
+          <li><strong>Track Control:</strong> <kbd>A / X</kbd> play-pause, <kbd>B / Y</kbd> next, stick click prev.</li>
+        </ul>
+      </div>
+      <div class="inst-card">
+        <h4><i class="fas fa-desktop"></i> Desktop First-Person Controls</h4>
+        <ul>
+          <li><strong>Look & Walk:</strong> Click screen to lock mouse. <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to walk / drive.</li>
+          <li><strong>Board & Exit:</strong> Press <kbd>E</kbd> near eVTOL or Ground Rover to board/exit.</li>
+          <li><strong>eVTOL Flight:</strong> Hold <kbd>Space</kbd> for vertical lift, <kbd>W</kbd> cruise thrust.</li>
+          <li><strong>Music & Media:</strong> Press <kbd>Space</kbd> to Play/Pause on foot, <kbd>N</kbd> Next, <kbd>P</kbd> Prev.</li>
+          <li><strong>Teleport Hubs:</strong> Use bottom-right buttons to jump across campus anytime.</li>
+        </ul>
+      </div>
+    </div>
+
+    <button id="btn-start-club" class="btn-start">
+      <i class="fas fa-play"></i> START INVESTOR PITCH DEMONSTRATION
+    </button>
+  </div>
+
+  <!-- Application Bootstrap -->
+  <script type="module" src="js/main.js?v=2.3"></script>
+</body>
+</html>
