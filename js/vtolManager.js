@@ -18,12 +18,12 @@ export class VTOLManager {
     this.rotorAngle = 0.0;
 
     // Helipad Locations
-    this.helipadAlphaPos = new THREE.Vector3(0, 30.2, 28);
+    this.helipadAlphaPos = new THREE.Vector3(0, 30.2, 38); // matches Helipad Alpha in clubScene (z = 38)
     this.helipadBravoPos = new THREE.Vector3(0, 5.2, -140);
 
     // Skyway Navigation Corridor Waypoints
     this.waypoints = [
-      new THREE.Vector3(0, 30.2, 28),     // Alpha Launch
+      new THREE.Vector3(0, 30.2, 38),     // Alpha Launch
       new THREE.Vector3(0, 42.0, 10),     // Climb
       new THREE.Vector3(25, 48.0, -35),   // Scenic curve right over city
       new THREE.Vector3(15, 45.0, -85),   // Scenic curve back

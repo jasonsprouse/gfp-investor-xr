@@ -8,6 +8,8 @@ import { NPCManager } from './npcManager.js';
 import { VTOLManager } from './vtolManager.js';
 import { MobilityManager } from './mobilityManager.js';
 import { BoothManager } from './boothManager.js';
+import { RelicPavilion } from './relicPavilion.js';
+import { DocentNPC } from './docentNPC.js';
 
 class App {
   constructor() {
@@ -37,7 +39,7 @@ class App {
 
     // Initial Spawn at Executive Pitch Skyport Observation Deck (y = 30)
     this.dolly = new THREE.Group();
-    this.dolly.position.set(0, 30.0, 24.0);
+    this.dolly.position.set(0, 30.0, 22.0);
     this.dolly.add(this.camera);
     this.scene.add(this.dolly);
 
@@ -59,6 +61,7 @@ class App {
     this.renderer.xr.addEventListener('sessionstart', () => {
       document.getElementById('hud-overlay').style.display = 'none';
       document.getElementById('instructions-modal').classList.add('hidden');
+      setTimeout(() => this.docent && this.docent.greet(), 2500);
     });
 
     this.renderer.xr.addEventListener('sessionend', () => {
@@ -78,11 +81,26 @@ class App {
     this.vtolManager = new VTOLManager(this.scene);
     this.mobilityManager = new MobilityManager(this.scene);
     this.boothManager = new BoothManager(this.scene, {
-      onNarrationChange: (active) => this.audioManager.setDucked(active),
+      onNarrationChange: (active) => this.setVoiceSource('booth', active),
       onOpenLink: (url) => this.openBoothLink(url),
       onNotify: (msg) => this.showHUDNotification(msg)
     });
     this.boothManager.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
+
+    this.relicPavilion = new RelicPavilion(this.scene, {
+      renderer: this.renderer,
+      onOpenLink: (url) => this.openBoothLink(url),
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    this.relicPavilion.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
+
+    this.docent = new DocentNPC(this.scene, this.npcManager, {
+      boothManager: this.boothManager,
+      relicPavilion: this.relicPavilion,
+      onVoiceChange: (active) => this.setVoiceSource('docent', active),
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    this.docent.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
 
     // Register vehicle interactable hitboxes
     if (this.vtolManager.interactableObjects) {
@@ -166,6 +184,18 @@ class App {
         case 'KeyL':
           if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('link', this.dolly.position);
           break;
+        case 'KeyB':
+          if (this.playerState === 'WALKING' && this.boothManager) this.boothManager.commandNearest('view', this.dolly.position);
+          break;
+        case 'KeyT':
+          if (this.playerState === 'WALKING' && this.docent) {
+            if (this.docent.touring) this.docent.stop(true);
+            else this.docent.startTour();
+          }
+          break;
+        case 'KeyH':
+          if (this.playerState === 'WALKING' && this.docent) this.docent.explainNearest(this.dolly.position);
+          break;
         case 'Space':
           if (this.playerState === 'VTOL_PILOT') {
             this.isAscending = true;
@@ -233,6 +263,14 @@ class App {
   }
 
   handleAction(action) {
+    if (typeof action === 'string' && action.startsWith('relic:')) {
+      if (this.relicPavilion) this.relicPavilion.handleAction(action, this.dolly.position);
+      return;
+    }
+    if (typeof action === 'string' && action.startsWith('docent:')) {
+      if (this.docent) this.docent.handleAction(action, this.dolly.position);
+      return;
+    }
     if (typeof action === 'string' && action.startsWith('booth:')) {
       if (this.boothManager) this.boothManager.handleAction(action, this.dolly.position);
       return;
@@ -281,6 +319,13 @@ class App {
     } else if (action === 'inspect_plinth') {
       this.showHUDNotification('GOOD FAITH PARADIGM INVESTOR PILLAR INSPECTED');
     }
+  }
+
+  setVoiceSource(source, active) {
+    if (!this.voiceSources) this.voiceSources = new Set();
+    if (active) this.voiceSources.add(source);
+    else this.voiceSources.delete(source);
+    this.audioManager.setDucked(this.voiceSources.size > 0);
   }
 
   openBoothLink(url) {
@@ -437,6 +482,7 @@ class App {
       modal?.classList.add('hidden');
       this.selectTrack(0);
       this.controls.lock();
+      setTimeout(() => this.docent && this.docent.greet(), 1800);
     });
 
     // Player Controls
@@ -478,9 +524,26 @@ class App {
       this.handleAction('exit_vehicle');
     }
 
+    if (view && view.startsWith('booth:') && this.boothManager) {
+      const booth = this.boothManager.getBooth(view.split(':')[1]);
+      if (booth) {
+        const stand = this.boothManager.getStandPoint(booth);
+        this.dolly.position.set(stand.x, this.dolly.position.y, stand.z);
+        const look = booth.group.localToWorld(new THREE.Vector3(0, 2.1, -1.9));
+        this.camera.lookAt(look);
+      }
+      return;
+    }
+
     if (view === 'skyport') {
-      this.dolly.position.set(0, 30.0, 24);
+      this.dolly.position.set(0, 30.0, 22);
       this.camera.lookAt(0, 34.0, 12);
+    } else if (view === 'relics') {
+      this.dolly.position.set(0, 30.0, 22.4);
+      this.camera.lookAt(0, 31.3, 28.5);
+    } else if (view === 'docent') {
+      this.dolly.position.set(-0.6, 30.0, 21.6);
+      this.camera.lookAt(-3.0, 31.3, 16.6);
     } else if (view === 'vtol') {
       this.handleAction('board_vtol');
     } else if (view === 'vertiport') {
@@ -603,6 +666,12 @@ class App {
       }
 
       // Update VTOL Flight & Ground Mobility
+      if (this.relicPavilion) {
+        this.relicPavilion.update(delta, t);
+      }
+      if (this.docent) {
+        this.docent.update(delta, t, this.dolly.position);
+      }
       if (this.boothManager) {
         this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
       }
@@ -707,10 +776,18 @@ class App {
         hud.innerHTML = `<span class="badge-icon">🚗</span> <strong>LAST-MILE POD READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO DRIVE</span>`;
       } else {
         const booth = this.boothManager ? this.boothManager.getNearbyBooth(this.dolly.position, 7.5) : null;
+        const cluster = this.relicPavilion ? this.relicPavilion.getNearbyCluster(this.dolly.position, 3.6) : null;
         if (booth) {
           hud.style.display = 'block';
           const hasNarr = booth.def.narration;
-          hud.innerHTML = `<span class="badge-icon">\u{1F4FD}</span> <strong>${booth.def.title}</strong> &bull; <span class="badge-action">${hasNarr ? '[X] NARRATE' : '[X] NEXT'} &nbsp;[Z] PREV &nbsp;[C] NEXT &nbsp;[L] OPEN LINK</span>`;
+          const viewHint = booth.views && booth.views.length > 1 ? ' &nbsp;[B] VIEW' : '';
+          hud.innerHTML = `<span class="badge-icon">\u{1F4FD}</span> <strong>${booth.def.title}</strong> &bull; <span class="badge-action">${hasNarr ? '[X] NARRATE' : '[X] NEXT'} &nbsp;[Z] PREV &nbsp;[C] NEXT${viewHint} &nbsp;[L] LINK &nbsp;[H] DOCENT</span>`;
+        } else if (cluster) {
+          hud.style.display = 'block';
+          hud.innerHTML = `<span class="badge-icon">\u2728</span> <strong>${cluster.title}</strong> &bull; <span class="badge-action">${cluster.hint.toUpperCase()} &nbsp;[H] DOCENT EXPLAINS</span>`;
+        } else if (this.docent && this.docent.isNearKiosk(this.dolly.position)) {
+          hud.style.display = 'block';
+          hud.innerHTML = `<span class="badge-icon">\u{1F9ED}</span> <strong>DOCENT LUX</strong> &bull; <span class="badge-action">[T] TOUR &nbsp;[H] EXPLAIN NEAREST &nbsp;OR USE THE KIOSK</span>`;
         } else {
           hud.style.display = 'none';
         }
@@ -766,6 +843,36 @@ window.addEventListener('DOMContentLoaded', () => {
   try {
     const app = new App();
     app.start();
+    window.__gfpApp = app; // handy for debugging in the console
+
+    // Optional dev/QA query parameters, e.g. ?clean=1&view=relics&do=relic:plate3:toggle
+    //   clean=1        hide the welcome modal and HUD (clean screenshots)
+    //   view=<preset>  teleport on load (skyport, relics, docent, floor, booth:<id>, ...)
+    //   do=a,b,c       run actions (booth:/relic:/docent:/play...) shortly after load;
+    //                  advance:<seconds> fast-forwards relic/docent/booth animations (software-GL QA runs slowly)
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('clean')) {
+      document.getElementById('instructions-modal')?.classList.add('hidden');
+      const hud = document.getElementById('hud-overlay');
+      if (hud) hud.style.display = 'none';
+    }
+    if (q.get('view')) app.teleportToPreset(q.get('view'));
+    if (q.get('voice') === '0' && app.docent) app.docent.synth = null; // captions only (no speech synthesis)
+    if (q.get('do')) {
+      setTimeout(() => q.get('do').split(',').forEach((a) => {
+        const act = a.trim();
+        if (act.startsWith('advance:')) {
+          const total = parseFloat(act.split(':')[1]) || 0;
+          for (let s = 0; s < total; s += 0.1) {
+            app.relicPavilion.update(0.1, s);
+            app.docent.update(0.1, s, app.dolly.position);
+            app.boothManager.update(0.1, s, app.dolly.position, app.audioManager);
+          }
+        } else {
+          app.handleAction(act);
+        }
+      }), 1500);
+    }
   } catch (err) {
     console.error("Initialization error:", err);
     const box = document.getElementById('debug-error-box');

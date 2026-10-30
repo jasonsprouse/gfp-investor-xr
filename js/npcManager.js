@@ -16,7 +16,8 @@ export class NPCManager {
     outfitColor = 0xff007f,
     accentColor = 0x00f0ff,
     hairColor = 0x1a1520,
-    danceStyle = 0
+    danceStyle = 0,
+    register = true // false: caller animates the NPC itself (e.g. the docent), keep out of the dance loop
   }) {
     const root = new THREE.Group();
     root.position.set(x, y, z);
@@ -268,7 +269,7 @@ export class NPCManager {
       timeOffset: Math.random() * 10
     };
 
-    this.npcs.push(npcData);
+    if (register) this.npcs.push(npcData);
     return npcData;
   }
 

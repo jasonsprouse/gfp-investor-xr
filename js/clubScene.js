@@ -1079,9 +1079,25 @@ export class ClubScene {
 
     // Glowing Perimeter Edge Strip & Glass Balustrade
     const edgeMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-    const edgeMesh = new THREE.Mesh(new THREE.BoxGeometry(deckW + 0.2, 0.15, deckL + 0.2), edgeMat);
-    edgeMesh.position.set(0, deckY + 0.05, deckZ);
-    this.scene.add(edgeMesh);
+    // Glowing perimeter edge strips: four thin bars (not a solid slab that would bury the deck floor)
+    [
+      [0, -deckL / 2, deckW + 0.2, 0.2],
+      [0, deckL / 2, deckW + 0.2, 0.2],
+      [-deckW / 2, 0, 0.2, deckL],
+      [deckW / 2, 0, 0.2, deckL]
+    ].forEach(([ox, oz, w, d]) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.12, d), edgeMat);
+      bar.position.set(ox, deckY + 0.06, deckZ + oz);
+      this.scene.add(bar);
+    });
+
+    // Soft warm point lights over the deck so booths, relics and the docent are readable.
+    // Range-limited so they do not reach the club interior 20 m below.
+    [[-9, 14], [9, 14], [-9, 26], [9, 26], [0, 22], [0, 37]].forEach(([lx, lz]) => {
+      const light = new THREE.PointLight(0xfff0d8, 1.7, 20, 1.4);
+      light.position.set(lx, deckY + 5.5, lz);
+      this.scene.add(light);
+    });
 
     const glassBalustradeMat = new THREE.MeshPhysicalMaterial({
       color: 0x00f0ff,

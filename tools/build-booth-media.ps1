@@ -46,6 +46,22 @@ function Convert-Single($src, $out) {
   $c.G.Dispose(); $c.Bmp.Dispose()
 }
 
+# Keep native aspect ratio (longest side <= 1280) so the runtime composer can letterbox as needed
+function Convert-Native($src, $out, $maxSide = 1280) {
+  $img = [System.Drawing.Image]::FromFile($src)
+  try {
+    $scale = [Math]::Min(1.0, $maxSide / [Math]::Max($img.Width, $img.Height))
+    $w = [Math]::Max(1, [int]($img.Width * $scale)); $h = [Math]::Max(1, [int]($img.Height * $scale))
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.Clear([System.Drawing.Color]::FromArgb(255, 5, 8, 16))
+    $g.DrawImage($img, 0, 0, $w, $h)
+    Save-Jpeg $bmp $out
+    $g.Dispose(); $bmp.Dispose()
+  } finally { $img.Dispose() }
+}
+
 function Convert-Pair($left, $right, $out) {
   $c = New-Canvas
   Draw-Contain $c.G $left 8 8 ($W / 2 - 16) ($H - 16)
@@ -71,28 +87,18 @@ for ($i = 1; $i -le 20; $i++) {
 }
 Copy-Audio (Join-Path $Source "audio_prismatic") (Join-Path $Dest "prismatic")
 
-# 2. NFT Harps of God Raffle deck (16 slides: video evidence frame | GFP archival enhancement)
-$harps = @(
-  @('vid_01_evolve_type1.jpg', 'slice_13_the_omega_point.png'),
-  @('vid_03_miracles_sheet.jpg', 'pdf_miracles_of_the_holy_spirit_pair.png'),
-  @('vid_04_mnemonic_overlay.jpg', 'pdf_double_slit_theophany.png'),
-  @('vid_07_early_universe_overlay.jpg', 'slice_03_quantum_pneumatology.png'),
-  @('vid_10_galactic_arm_milky_way.jpg', 'pdf_galactic_harp_exegesis.png'),
-  @('vid_11_festival_flyer_fullscreen.jpg', 'slice_09_entanglement_1111_signal.png'),
-  @('vid_13_rorschach_inkblot.jpg', 'slice_08_supernatural_symmetry.png'),
-  @('vid_14_dollar_unfinished_pyramid.jpg', 'slice_11_theology_of_fiat.png'),
-  @('vid_16_golden_plates_table.jpg', 'pdf_osirian_resurrection_cycle.png'),
-  @('vid_17_plates_2000_2001_overlay.jpg', 'asset_golden_plates_blueprint.png'),
-  @('vid_02_raffle_medallions.jpg', 'asset_medallions_qr_coin.png'),
-  @('vid_20_3d_three_earths_table.jpg', 'slice_05_sry_gene_catalyst.png'),
-  @('vid_21_3d_golden_plates_closeup.jpg', 'slice_15_axolotl_metanoia.png'),
-  @('vid_18_museum_tour_finale.jpg', 'asset_harps_of_god_both.jpg'),
-  @('vid_22_pyramid_plates_oasis.jpg', 'slice_14_eight_principles_fifth_sun.png'),
-  @('vid_23_golden_harps_clouds.jpg', 'slice_12_galactic_eschatology.png')
-)
+# 2. NFT Harps of God Raffle deck (16 slides). Image pairs come from HARPS_SLIDES in the live
+#    nft_harps_presentation.html (via media/booths/harps/slides.json, see tools/extract-slide-data.mjs):
+#    slide_NN_a.jpg = video evidence frame (img1), slide_NN_b.jpg = GFP synthesis image (img2).
+$harpsJson = Join-Path $Dest "harps\slides.json"
+if (-not (Test-Path $harpsJson)) { throw "Run tools/extract-slide-data.mjs first ($harpsJson missing)" }
+$harps = Get-Content $harpsJson -Raw -Encoding UTF8 | ConvertFrom-Json
+# Remove stale side-by-side composites from the previous layout
+Get-ChildItem (Join-Path $Dest "harps") -Filter "slide_??.jpg" -ErrorAction SilentlyContinue | Remove-Item -Force
 for ($i = 0; $i -lt $harps.Count; $i++) {
   $n = ($i + 1).ToString("00")
-  Convert-Pair (Join-Path $A $harps[$i][0]) (Join-Path $A $harps[$i][1]) (Join-Path $Dest "harps\slide_$n.jpg")
+  Convert-Native (Join-Path $A $harps[$i].img1) (Join-Path $Dest "harps\slide_${n}_a.jpg")
+  Convert-Native (Join-Path $A $harps[$i].img2) (Join-Path $Dest "harps\slide_${n}_b.jpg")
 }
 Copy-Audio (Join-Path $Source "audio_harps") (Join-Path $Dest "harps")
 
@@ -108,6 +114,21 @@ Convert-Pair (Join-Path $A 'card_yellow_y_harps_492856_front.jpg') (Join-Path $A
 Convert-Pair (Join-Path $A 'card_green_g_harps_490643_front.jpg') (Join-Path $A 'card_green_g_harps_490643_back.jpg') (Join-Path $Dest "cards\slide_02.jpg")
 Convert-Single (Join-Path $A 'asset_harps_of_god_both.jpg') (Join-Path $Dest "cards\slide_03.jpg")
 Convert-Single (Join-Path $A 'asset_medallions_qr_coin.png') (Join-Path $Dest "cards\slide_04.jpg")
+
+# 5. Relic Pavilion textures: Harps of God card faces (4:5 portrait, 640x800, upscaled with bicubic)
+function Convert-Card($src, $out) {
+  $bmp = New-Object System.Drawing.Bitmap(640, 800)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $g.Clear([System.Drawing.Color]::FromArgb(255, 10, 12, 20))
+  Draw-Contain $g $src 0 0 640 800
+  Save-Jpeg $bmp $out
+  $g.Dispose(); $bmp.Dispose()
+}
+Convert-Card (Join-Path $A 'card_yellow_y_harps_492856_front.jpg') (Join-Path $Dest "relics\yellow_front.jpg")
+Convert-Card (Join-Path $A 'card_yellow_y_harps_492856_back.jpg')  (Join-Path $Dest "relics\yellow_back.jpg")
+Convert-Card (Join-Path $A 'card_green_g_harps_490643_front.jpg')  (Join-Path $Dest "relics\green_front.jpg")
+Convert-Card (Join-Path $A 'card_green_g_harps_490643_back.jpg')   (Join-Path $Dest "relics\green_back.jpg")
 
 $size = (Get-ChildItem $Dest -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
 Write-Output ("Booth media built: {0:N1} MB in {1}" -f $size, $Dest)

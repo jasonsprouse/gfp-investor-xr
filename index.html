@@ -8,6 +8,7 @@
   <!-- Visual Error Overlay for instant on-screen diagnostics -->
   <script>
     window.addEventListener('error', function(e) {
+      if (e.filename && e.filename.indexOf('extension://') >= 0) return; // browser-extension noise (e.g. wallets)
       console.error(e);
       var box = document.getElementById('debug-error-box');
       if (box) {
@@ -16,11 +17,13 @@
       }
     });
     window.addEventListener('unhandledrejection', function(e) {
+      var stack = e.reason ? String(e.reason.stack || e.reason) : String(e);
+      if (stack.indexOf('extension://') >= 0) return; // browser-extension noise (e.g. wallets)
       console.error(e);
       var box = document.getElementById('debug-error-box');
       if (box) {
         box.style.display = 'block';
-        box.textContent += '⚠️ [Promise Error] ' + (e.reason ? (e.reason.stack || e.reason) : e) + '\n\n';
+        box.textContent += '⚠️ [Promise Error] ' + stack + '\n\n';
       }
     });
   </script>
@@ -152,6 +155,8 @@
         <span><i class="fas fa-location-dot"></i> Intermodal Hubs</span>
         <div class="preset-buttons">
           <button class="btn-preset" data-view="skyport">Skyport Pitch</button>
+          <button class="btn-preset" data-view="relics">Relics</button>
+          <button class="btn-preset" data-view="docent">Docent</button>
           <button class="btn-preset" data-view="vtol">eVTOL Cockpit</button>
           <button class="btn-preset" data-view="vertiport">Vertiport Bravo</button>
           <button class="btn-preset" data-view="rover">Last-Mile Pod</button>
@@ -180,7 +185,8 @@
           <li><strong>Boarding:</strong> Aim laser & click trigger or press <kbd>A</kbd> near eVTOL or Rover.</li>
           <li><strong>Vehicle Flight / Drive:</strong> Left stick accelerates/climbs; right stick steers.</li>
           <li><strong>Track Control:</strong> <kbd>A / X</kbd> play-pause, <kbd>B / Y</kbd> next, stick click prev.</li>
-          <li><strong>Pitch Booths:</strong> Aim laser at booth PREV / PLAY / NEXT / AUTO buttons or the booth screen.</li>
+          <li><strong>Pitch Booths:</strong> Aim laser at booth PREV / PLAY / NEXT / AUTO / VIEW buttons or the booth screen.</li>
+          <li><strong>Relics &amp; Docent:</strong> Click the Golden Plates, cards, Sphinx and coins. Use the docent kiosk (TOUR / EXPLAIN / RELICS / STOP).</li>
         </ul>
       </div>
       <div class="inst-card">
@@ -191,7 +197,8 @@
           <li><strong>eVTOL Flight:</strong> Hold <kbd>Space</kbd> for vertical lift, <kbd>W</kbd> cruise thrust.</li>
           <li><strong>Music & Media:</strong> Press <kbd>Space</kbd> to Play/Pause on foot, <kbd>N</kbd> Next, <kbd>P</kbd> Prev.</li>
           <li><strong>Teleport Hubs:</strong> Use bottom-right buttons to jump across campus anytime.</li>
-          <li><strong>Pitch Booths (Skyport):</strong> Click booth buttons, or near a booth press <kbd>X</kbd> narrate, <kbd>Z</kbd>/<kbd>C</kbd> prev/next, <kbd>V</kbd> auto-advance, <kbd>L</kbd> open source link.</li>
+          <li><strong>Pitch Booths (Skyport):</strong> Click booth buttons, or near a booth press <kbd>X</kbd> narrate, <kbd>Z</kbd>/<kbd>C</kbd> prev/next, <kbd>B</kbd> change view (video / GFP / both), <kbd>V</kbd> auto-advance, <kbd>L</kbd> open source link.</li>
+          <li><strong>Docent Lux:</strong> Press <kbd>T</kbd> for a guided tour (or <kbd>T</kbd> again to stop), <kbd>H</kbd> near a booth or relic and the docent explains it. The Relics pavilion has click-to-animate Golden Plates, Harps of God cards, the Sphinx count and the medallions.</li>
         </ul>
       </div>
     </div>
