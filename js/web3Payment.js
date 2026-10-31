@@ -512,3 +512,210 @@ export class Web3Payment {
 }
 
 export const web3Payment = new Web3Payment();
+
+// ---------------------------------------------------------------------------
+// Static Host / GitHub Pages L402 Edge Fallback
+// When deployed to a static CDN (e.g. GitHub Pages) where /api/* returns 404/405 HTML,
+// transparently emulate the /api/* L402 HTTP 402 endpoints in-browser so all Web3 demos work.
+// When running with serve.py / Docker / Fly.io, real backend responses pass through untouched.
+// ---------------------------------------------------------------------------
+(function installStaticHost402Fallback() {
+  if (typeof window === 'undefined' || !window.fetch) return;
+  const origFetch = window.fetch.bind(window);
+  const state = {
+    cart: {},
+    credits: 0,
+    tier: 'free',
+    trialExpires: null,
+    settledTokens: new Set(),
+    challenges: new Map()
+  };
+
+  const CATALOG = {
+    '492856': { item_id: '492856', name: 'Harps of God — Yellow Y (#492856)', price_usd: 25.0, price_sats: 25000, price_eth: 0.01 },
+    '490643': { item_id: '490643', name: 'Harps of God — Green G (#490643)', price_usd: 25.0, price_sats: 25000, price_eth: 0.01 }
+  };
+
+  const MEDALLIONS = {
+    gold: { credits: 500, sats: 50000, usd: 50.0, label: '2 oz Gold Medallion Demo (500 Credits)' },
+    silver: { credits: 100, sats: 12000, usd: 12.0, label: '2 oz Silver Medallion Demo (100 Credits)' },
+    copper: { credits: 25, sats: 3000, usd: 3.0, label: '2 oz Copper Medallion Demo (25 Credits)' }
+  };
+
+  const THEOPHANY_REFLECTIONS = [
+    'Light Over The Word: 35mm optical capture at Dallas World Aquarium (Dec 2005) — coherence confirmed.',
+    'Sacred Blueprint Alignment: The Four Pillars converge in the Adventure Corridor Living Lab.',
+    'Multiverse Proof Equation: Plate 1 resonance unlocked — Harps of God harmonic verified.'
+  ];
+
+  function makeJsonResponse(status, body, extraHeaders = {}) {
+    const headers = new Headers({ 'Content-Type': 'application/json', ...extraHeaders });
+    return new Response(JSON.stringify(body), { status, headers });
+  }
+
+  function make402Challenge(resource, sats, usd, description) {
+    const pid = 'pay_' + Math.random().toString(36).slice(2, 10);
+    const mac = btoa(JSON.stringify({ payment_id: pid, resource, amount: sats }));
+    const inv = `lnbc${sats}n1p_gfp_demo_${pid}`;
+    state.challenges.set(pid, { payment_id: pid, resource, amount: sats, amount_usd: usd, description, macaroon: mac, invoice: inv });
+    const payload = {
+      status: 402,
+      error: 'Payment Required',
+      payment_id: pid,
+      amount: sats,
+      amount_usd: usd,
+      currency: 'SATS',
+      description,
+      macaroon: mac,
+      invoice: inv,
+      settle_url: '/api/402/settle'
+    };
+    return makeJsonResponse(402, payload, {
+      'WWW-Authenticate': `L402 macaroon="${mac}", invoice="${inv}"`,
+      'Payment-Required': JSON.stringify({ payment_id: pid, amount: sats, amount_usd: usd, currency: 'SATS', description, settle_url: '/api/402/settle' })
+    });
+  }
+
+  function isSettled(headers, resource) {
+    const h = new Headers(headers || {});
+    const tok = (h.get('X-Payment-Token') || h.get('Authorization') || '').replace(/^(Bearer|L402)\s+/i, '').trim();
+    return tok && state.settledTokens.has(`${tok}:${resource}`);
+  }
+
+  function buildCartSummary() {
+    const items = [];
+    let total_items = 0;
+    let subtotal_usd = 0;
+    let subtotal_sats = 0;
+    let subtotal_eth = 0;
+    for (const [id, qty] of Object.entries(state.cart)) {
+      if (qty > 0 && CATALOG[id]) {
+        const c = CATALOG[id];
+        items.push({ ...c, quantity: qty, line_total_usd: c.price_usd * qty, line_total_sats: c.price_sats * qty });
+        total_items += qty;
+        subtotal_usd += c.price_usd * qty;
+        subtotal_sats += c.price_sats * qty;
+        subtotal_eth += c.price_eth * qty;
+      }
+    }
+    return {
+      items,
+      total_items,
+      subtotal_usd,
+      subtotal_sats,
+      subtotal_eth: Number(subtotal_eth.toFixed(4)),
+      raffle_entries: total_items,
+      dual_harp_synergy: Boolean(state.cart['492856'] > 0 && state.cart['490643'] > 0)
+    };
+  }
+
+  async function handleStaticApi(urlStr, options = {}) {
+    const u = new URL(urlStr, window.location.origin);
+    const path = u.pathname;
+    let body = {};
+    if (options.body) {
+      try { body = JSON.parse(options.body); } catch (_) {}
+    }
+
+    if (path === '/api/402/settle') {
+      const pid = body.payment_id;
+      const ch = state.challenges.get(pid) || { resource: body.resource || '/api/cart/checkout' };
+      const tok = 'l402_demo_' + Math.random().toString(36).slice(2, 12);
+      state.settledTokens.add(`${tok}:${ch.resource}`);
+      return makeJsonResponse(200, { status: 'settled', payment_id: pid, token: tok, preimage: '00'.repeat(32) });
+    }
+    if (path === '/api/cart/items' && (!options.method || options.method === 'GET')) {
+      return makeJsonResponse(200, buildCartSummary());
+    }
+    if (path === '/api/cart/items' && options.method === 'POST') {
+      const id = String(body.item_id || '');
+      const qty = Number(body.quantity || 1);
+      if (CATALOG[id] && qty > 0) state.cart[id] = (state.cart[id] || 0) + qty;
+      return makeJsonResponse(200, buildCartSummary());
+    }
+    if (path === '/api/cart/remove') {
+      delete state.cart[String(body.item_id || '')];
+      return makeJsonResponse(200, buildCartSummary());
+    }
+    if (path === '/api/cart/clear') {
+      state.cart = {};
+      return makeJsonResponse(200, buildCartSummary());
+    }
+    if (path === '/api/cart/checkout') {
+      const sum = buildCartSummary();
+      if (!isSettled(options.headers, '/api/cart/checkout')) {
+        return make402Challenge('/api/cart/checkout', sum.subtotal_sats || 25000, sum.subtotal_usd || 25.0, `Harps of God NFT Basket Checkout (${sum.total_items} item(s))`);
+      }
+      state.cart = {};
+      return makeJsonResponse(200, {
+        status: 'confirmed',
+        order: {
+          order_id: 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+          total_items: sum.total_items,
+          raffle_tickets: Array.from({ length: sum.total_items }, (_, i) => `RAFFLE-${1000 + i}`),
+          museum_tour_pass: 'PASS-GOLDEN-PLATES-VIP'
+        }
+      });
+    }
+    if (path === '/api/credits/balance') {
+      return makeJsonResponse(200, { balance: state.credits, toss_cost: 5 });
+    }
+    if (path === '/api/credits/purchase') {
+      const metal = String(body.metal || 'gold').toLowerCase();
+      const m = MEDALLIONS[metal] || MEDALLIONS.gold;
+      if (!isSettled(options.headers, '/api/credits/purchase')) {
+        return make402Challenge('/api/credits/purchase', m.sats, m.usd, m.label);
+      }
+      state.credits += m.credits;
+      return makeJsonResponse(200, { status: 'credited', balance: state.credits, credits_added: m.credits, metal });
+    }
+    if (path === '/api/credits/spend') {
+      if (state.credits < 5) return makeJsonResponse(400, { error: 'Insufficient medallion credits (5 required)' });
+      state.credits -= 5;
+      const reflection = THEOPHANY_REFLECTIONS[Math.floor(Math.random() * THEOPHANY_REFLECTIONS.length)];
+      return makeJsonResponse(200, { status: 'blessed', balance: state.credits, reflection });
+    }
+    if (path === '/api/subscriptions/status') {
+      return makeJsonResponse(200, {
+        tier: state.tier,
+        tier_name: state.tier === 'paid' ? 'Pneumatic Investor (VIP)' : (state.tier === 'freemium' ? 'Seeker (24h Trial)' : 'Pilgrim (Free)'),
+        trial_expires_at: state.trialExpires
+      });
+    }
+    if (path === '/api/subscriptions/trial') {
+      state.tier = 'freemium';
+      state.trialExpires = new Date(Date.now() + 86400000).toISOString();
+      return makeJsonResponse(200, { status: 'activated', tier: 'freemium', trial_expires_at: state.trialExpires });
+    }
+    if (path === '/api/subscriptions/upgrade') {
+      if (!isSettled(options.headers, '/api/subscriptions/upgrade')) {
+        return make402Challenge('/api/subscriptions/upgrade', 100000, 100.0, 'Upgrade to Pneumatic Investor (Permanent VIP Access)');
+      }
+      state.tier = 'paid';
+      return makeJsonResponse(200, { status: 'upgraded', tier: 'paid' });
+    }
+    if (path === '/api/subscriptions/vip-content') {
+      if (state.tier === 'free') {
+        return make402Challenge('/api/subscriptions/vip-content', 100000, 100.0, 'VIP Investor Dossier & Sacred Frequency Vault');
+      }
+      return makeJsonResponse(200, { status: 'unlocked', title: 'Executive Theophany Dossier & HOA 2.0 Blueprints', content: 'Full VIP access unlocked.' });
+    }
+    return makeJsonResponse(200, { status: 'ok' });
+  }
+
+  window.fetch = async function(input, init) {
+    const urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+    const isApi = urlStr.startsWith('/api/') || urlStr.includes('/api/');
+    if (!isApi) return origFetch(input, init);
+    try {
+      const res = await origFetch(input, init);
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if ((res.status === 404 || res.status === 405) && !ct.includes('application/json')) {
+        return handleStaticApi(urlStr, init);
+      }
+      return res;
+    } catch (_) {
+      return handleStaticApi(urlStr, init);
+    }
+  };
+})();
