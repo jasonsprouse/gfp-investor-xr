@@ -64,8 +64,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-ID, X-Payment-Token')
-        self.send_header('Access-Control-Expose-Headers', 'WWW-Authenticate, Payment-Required, X-Payment-Token')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-ID, X-Payment-Token, X-PAYMENT')
+        self.send_header('Access-Control-Expose-Headers', 'WWW-Authenticate, Payment-Required, X-PAYMENT-REQUIRED, X-PAYMENT, X-PAYMENT-RESPONSE, X-Payment-Token')
         super().end_headers()
 
     def _is_api_request(self):

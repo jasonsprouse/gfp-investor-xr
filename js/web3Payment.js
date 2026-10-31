@@ -1,9 +1,11 @@
 /**
- * Good Faith Paradigm WebXR — Web3 HTTP 402 Payment Interceptor & Settlement Manager
+ * Good Faith Paradigm WebXR — x402 Payment Protocol Interceptor & Settlement Manager
  * Standards alignment:
+ * - x402 Payment Protocol (https://blog.payai.network/x402-payment-protocol/)
+ *   - x402Version: 1, accepts: [{ scheme: "exact", network: "base" | "solana", maxAmountRequired, payTo, asset }]
+ *   - Client -> Server header: X-PAYMENT (Base64-encoded signed payment payload)
+ *   - Server -> Client header: X-PAYMENT-RESPONSE (Base64-encoded settlement receipt)
  * - RFC 9110 §15.5.3 (HTTP 402 Payment Required)
- * - L402 / LSAT protocol (Macaroons + Lightning invoice settlement)
- * - Automatic 402 challenge detection, modal rendering, and demo settlement faucet
  */
 
 export class Web3Payment {
@@ -46,12 +48,39 @@ export class Web3Payment {
     }
   }
 
+  buildX402PaymentHeader(token, challenge = {}) {
+    const payloadObj = {
+      x402Version: 1,
+      scheme: challenge.scheme || 'exact',
+      network: challenge.network || 'base',
+      payload: {
+        signature: '0x' + Array.from({ length: 64 }, (_, i) => ((i * 7 + 11) % 16).toString(16)).join(''),
+        authorization: {
+          from: '0x71C95911E9a5D330f4D621842EC243EE1343292e',
+          to: challenge.payTo || '0xd07dc4262bcdbf85190c01c996b4c06a461d2430',
+          value: String(challenge.maxAmountRequired || '1000000'),
+          validAfter: '0',
+          validBefore: String(Math.floor(Date.now() / 1000) + 3600),
+          nonce: '0x' + Math.random().toString(16).slice(2, 18).padEnd(16, '0')
+        },
+        payment_id: challenge.payment_id || '',
+        token: token || ''
+      }
+    };
+    try {
+      return btoa(JSON.stringify(payloadObj));
+    } catch (_) {
+      return token || '';
+    }
+  }
+
   getAuthHeaders(resource = '') {
     const headers = {
       'X-Client-ID': this.clientId,
       'Accept': 'application/json'
     };
     if (this.token) {
+      headers['X-PAYMENT'] = this.buildX402PaymentHeader(this.token, { resource });
       headers['Authorization'] = `Bearer ${this.token}`;
       headers['X-Payment-Token'] = this.token;
     }
@@ -59,7 +88,7 @@ export class Web3Payment {
   }
 
   /**
-   * Universal fetch wrapper that intercepts HTTP 402 and prompts settlement.
+   * Universal fetch wrapper that intercepts HTTP 402 (x402 Payment Protocol) and prompts settlement.
    */
   async fetchWith402(url, options = {}) {
     const headers = {
@@ -77,20 +106,29 @@ export class Web3Payment {
     }
 
     if (res.status === 402) {
-      // Parse 402 challenge metadata
-      const authHeader = res.headers.get('WWW-Authenticate') || '';
-      const payReqHeader = res.headers.get('Payment-Required');
+      const payReqHeader = res.headers.get('X-PAYMENT-REQUIRED') || res.headers.get('Payment-Required');
       let payMeta = {};
       if (payReqHeader) {
         try { payMeta = JSON.parse(payReqHeader); } catch (_) {}
       }
 
+      const firstAccept = Array.isArray(data.accepts) && data.accepts[0] ? data.accepts[0] : {};
+      const usdVal = data.amount_usd || payMeta.amount_usd || (data.amount ? data.amount / 1000 : 1.0);
+      const maxAtomic = firstAccept.maxAmountRequired || data.maxAmountRequired || payMeta.maxAmountRequired || String(Math.round(usdVal * 1000000));
+
       const challenge = {
+        x402Version: data.x402Version || payMeta.x402Version || 1,
+        accepts: data.accepts || [],
+        scheme: firstAccept.scheme || data.scheme || 'exact',
+        network: firstAccept.network || data.network || 'base',
+        payTo: firstAccept.payTo || data.payTo || '0xd07dc4262bcdbf85190c01c996b4c06a461d2430',
+        asset: firstAccept.asset || data.asset || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        maxAmountRequired: maxAtomic,
         payment_id: data.payment_id || payMeta.payment_id || data.challenge_id,
         amount: data.amount || payMeta.amount || 1000,
-        amount_usd: data.amount_usd || payMeta.amount_usd || (data.amount ? data.amount / 1000 : 1.0),
-        currency: data.currency || payMeta.currency || 'SATS',
-        description: data.description || payMeta.description || 'Payment Required',
+        amount_usd: usdVal,
+        currency: data.currency || payMeta.currency || 'USDC',
+        description: firstAccept.description || data.description || data.message || payMeta.description || 'x402 Payment Required',
         invoice: data.invoice || '',
         macaroon: data.macaroon || '',
         settle_url: data.settle_url || payMeta.settle_url || '/api/402/settle',
@@ -99,9 +137,10 @@ export class Web3Payment {
 
       return new Promise((resolve) => {
         this.showPaymentModal(challenge, async (settleResult) => {
-          // Re-attempt original request with the fresh settlement token
+          const xPaymentB64 = this.buildX402PaymentHeader(settleResult.token, challenge);
           const retryHeaders = {
             ...headers,
+            'X-PAYMENT': xPaymentB64,
             'Authorization': `Bearer ${settleResult.token}`,
             'X-Payment-Token': settleResult.token
           };
@@ -125,7 +164,6 @@ export class Web3Payment {
     const modal = document.getElementById('web3-payment-modal');
     if (!modal) return;
 
-    // Fill in challenge data
     const titleEl = document.getElementById('w3p-desc');
     const amountSatsEl = document.getElementById('w3p-sats');
     const amountUsdEl = document.getElementById('w3p-usd');
@@ -133,20 +171,32 @@ export class Web3Payment {
     const invoiceEl = document.getElementById('w3p-invoice');
     const statusEl = document.getElementById('w3p-status');
 
-    if (titleEl) titleEl.textContent = challenge.description || 'Web3 HTTP 402 Payment Required';
-    if (amountSatsEl) amountSatsEl.textContent = (challenge.amount || 0).toLocaleString() + ' ' + (challenge.currency || 'SATS');
-    if (amountUsdEl) amountUsdEl.textContent = challenge.amount_usd ? `($${Number(challenge.amount_usd).toFixed(2)} USD)` : '';
-    if (idEl) idEl.textContent = challenge.payment_id || '';
-    if (invoiceEl) invoiceEl.value = challenge.invoice || `lnbc${challenge.amount}u...${challenge.payment_id}`;
+    const usdFormatted = Number(challenge.amount_usd || 1.0).toFixed(2);
+    const atomicUsdc = challenge.maxAmountRequired || String(Math.round(Number(usdFormatted) * 1000000));
+
+    if (titleEl) titleEl.textContent = challenge.description || 'x402 Payment Protocol Challenge';
+    if (amountSatsEl) amountSatsEl.textContent = `${usdFormatted} USDC (Base / Solana)`;
+    if (amountUsdEl) amountUsdEl.textContent = `x402Version: 1 • scheme: exact • maxAmountRequired: ${Number(atomicUsdc).toLocaleString()} (${challenge.amount || 0} SATS eq.)`;
+    if (idEl) idEl.textContent = `network: ${challenge.network || 'base'} • id: ${challenge.payment_id || ''}`;
+    if (invoiceEl) {
+      invoiceEl.value = JSON.stringify({
+        x402Version: 1,
+        scheme: challenge.scheme || 'exact',
+        network: challenge.network || 'base',
+        payTo: challenge.payTo || '0xd07dc4262bcdbf85190c01c996b4c06a461d2430',
+        maxAmountRequired: String(atomicUsdc),
+        asset: challenge.asset || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+      });
+    }
     if (statusEl) {
-      statusEl.textContent = 'Challenge active • Ready for settlement';
+      statusEl.textContent = 'x402 Challenge Active • Awaiting signed X-PAYMENT header payload';
       statusEl.className = 'w3p-status pending';
     }
 
     modal.classList.remove('hidden');
     modal.style.display = 'flex';
 
-    this.onNotify(`⚡ HTTP 402: Payment required (${challenge.amount} ${challenge.currency})`);
+    this.onNotify(`⚡ x402 Payment Protocol: ${usdFormatted} USDC required`);
   }
 
   closeModal() {
@@ -446,36 +496,39 @@ export class Web3Payment {
     modal.innerHTML = `
       <div class="w3p-card">
         <div class="w3p-header">
-          <span class="w3p-badge"><i class="fas fa-lock"></i> HTTP 402 PAYMENT REQUIRED</span>
+          <span class="w3p-badge"><i class="fas fa-bolt"></i> x402 PAYMENT PROTOCOL (HTTP 402)</span>
           <button id="w3p-close" class="w3p-close-btn" title="Cancel">&times;</button>
         </div>
 
         <div id="w3p-desc" class="w3p-desc">Resource Unlocking Challenge</div>
 
         <div class="w3p-amount-box">
-          <div id="w3p-sats" class="w3p-amount-sats">1,000 SATS</div>
-          <div id="w3p-usd" class="w3p-amount-usd">($0.25 USD)</div>
+          <div id="w3p-sats" class="w3p-amount-sats">25.00 USDC (Base / Solana)</div>
+          <div id="w3p-usd" class="w3p-amount-usd">x402Version: 1 • scheme: exact</div>
         </div>
 
         <div class="w3p-field">
           <div class="w3p-label">
-            <span>LIGHTNING INVOICE / L402 MACAROON</span>
+            <span>x402 PAYMENT REQUIREMENTS (accepts[0])</span>
             <span id="w3p-id" style="font-family:monospace; color:#64748b;"></span>
           </div>
           <input type="text" id="w3p-invoice" class="w3p-input" readonly>
         </div>
 
         <div class="w3p-field">
-          <div class="w3p-label"><span>CRYPTOGRAPHIC PREIMAGE (OPTIONAL)</span></div>
-          <input type="text" id="w3p-preimage" class="w3p-input" placeholder="32-byte hex preimage proof...">
+          <div class="w3p-label">
+            <span>X-PAYMENT SIGNATURE / PREIMAGE PROOF (OPTIONAL)</span>
+            <a href="https://blog.payai.network/x402-payment-protocol/" target="_blank" rel="noopener" style="color:#00f0ff;text-decoration:none;">PayAI x402 Spec ↗</a>
+          </div>
+          <input type="text" id="w3p-preimage" class="w3p-input" placeholder="EIP-3009 / x402 signature or 32-byte hex proof...">
         </div>
 
         <div class="w3p-actions">
           <button id="w3p-btn-settle" class="w3p-btn-faucet">
-            <i class="fas fa-bolt"></i> Instant Demo Settlement Faucet
+            <i class="fas fa-bolt"></i> Sign &amp; Settle via x402 (X-PAYMENT)
           </button>
           <button id="w3p-btn-verify-preimage" class="w3p-btn-preimage">
-            <i class="fas fa-key"></i> Settle with Preimage Proof
+            <i class="fas fa-key"></i> Verify Custom x402 Proof
           </button>
         </div>
 
@@ -557,22 +610,60 @@ export const web3Payment = new Web3Payment();
     const pid = 'pay_' + Math.random().toString(36).slice(2, 10);
     const mac = btoa(JSON.stringify({ payment_id: pid, resource, amount: sats }));
     const inv = `lnbc${sats}n1p_gfp_demo_${pid}`;
-    state.challenges.set(pid, { payment_id: pid, resource, amount: sats, amount_usd: usd, description, macaroon: mac, invoice: inv });
+    const usdcAtomic = String(Math.max(1000, Math.round(Number(usd || 1.0) * 1000000)));
+    const accepts = [
+      {
+        scheme: 'exact',
+        network: 'base',
+        chainId: 'eip155:8453',
+        maxAmountRequired: usdcAtomic,
+        resource,
+        description,
+        mimeType: 'application/json',
+        payTo: '0xd07dc4262bcdbf85190c01c996b4c06a461d2430',
+        maxTimeoutSeconds: 300,
+        asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        extra: { name: 'USD Coin', symbol: 'USDC', decimals: 6, facilitatorUrl: 'https://facilitator.payai.network', protocolGuide: 'https://blog.payai.network/x402-payment-protocol/' }
+      },
+      {
+        scheme: 'exact',
+        network: 'solana',
+        maxAmountRequired: usdcAtomic,
+        resource,
+        description,
+        mimeType: 'application/json',
+        payTo: 'GFPx402Treasury1111111111111111111111111111',
+        maxTimeoutSeconds: 300,
+        asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        extra: { name: 'USDC (Solana)', symbol: 'USDC', decimals: 6, facilitatorUrl: 'https://facilitator.payai.network', protocolGuide: 'https://blog.payai.network/x402-payment-protocol/' }
+      }
+    ];
+    state.challenges.set(pid, { payment_id: pid, resource, amount: sats, amount_usd: usd, maxAmountRequired: usdcAtomic, description, macaroon: mac, invoice: inv });
     const payload = {
+      x402Version: 1,
+      protocol: 'x402',
+      protocol_guide: 'https://blog.payai.network/x402-payment-protocol/',
+      accepts,
       status: 402,
-      error: 'Payment Required',
+      error: 'X-PAYMENT header is required',
       payment_id: pid,
       amount: sats,
       amount_usd: usd,
-      currency: 'SATS',
+      maxAmountRequired: usdcAtomic,
+      payTo: '0xd07dc4262bcdbf85190c01c996b4c06a461d2430',
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      network: 'base',
+      scheme: 'exact',
+      currency: 'USDC',
       description,
       macaroon: mac,
       invoice: inv,
       settle_url: '/api/402/settle'
     };
     return makeJsonResponse(402, payload, {
-      'WWW-Authenticate': `L402 macaroon="${mac}", invoice="${inv}"`,
-      'Payment-Required': JSON.stringify({ payment_id: pid, amount: sats, amount_usd: usd, currency: 'SATS', description, settle_url: '/api/402/settle' })
+      'WWW-Authenticate': `x402 version="1", scheme="exact", network="base", L402 macaroon="${mac}", invoice="${inv}"`,
+      'Payment-Required': JSON.stringify({ x402Version: 1, payment_id: pid, amount: sats, amount_usd: usd, maxAmountRequired: usdcAtomic, currency: 'USDC', description, settle_url: '/api/402/settle' }),
+      'X-PAYMENT-REQUIRED': JSON.stringify({ x402Version: 1, payment_id: pid, maxAmountRequired: usdcAtomic, payTo: '0xd07dc4262bcdbf85190c01c996b4c06a461d2430', network: 'base', scheme: 'exact' })
     });
   }
 

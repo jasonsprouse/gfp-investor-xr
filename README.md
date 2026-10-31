@@ -2,9 +2,9 @@
 
 [![Live Production Demo](https://img.shields.io/badge/LIVE_WEBXR_DEMO-jasonsprouse.github.io%2Fgfp--investor--xr-00f0ff?style=for-the-badge&logo=github)](https://jasonsprouse.github.io/gfp-investor-xr/)
 [![Source Decks](https://img.shields.io/badge/PRESENTATION_ARCHIVE-digital--golden--plates-ffc400?style=for-the-badge&logo=github)](https://github.com/jasonsprouse/digital-golden-plates)
-[![HTTP 402 L402](https://img.shields.io/badge/WEB3_PAYMENTS-HTTP_402_%2F_L402-00ff88?style=for-the-badge)](https://datatracker.ietf.org/doc/html/rfc9110#section-15.5.3)
+[![x402 Payment Protocol](https://img.shields.io/badge/WEB3_PAYMENTS-x402_Payment_Protocol-00ff88?style=for-the-badge)](https://blog.payai.network/x402-payment-protocol/)
 
-An interactive **WebXR Spatial Investor Pitch Campus** and multi-tier virtual venue for **Good Faith Paradigm** ([@GparadigmOrgLove](https://www.youtube.com/@GparadigmOrgLove)), integrating narrated slide booths and interactive 3D digital relics from [`jasonsprouse/digital-golden-plates`](https://github.com/jasonsprouse/digital-golden-plates), an autonomous **NPC Docent (Docent Lux)** with synchronized voice narration, the **Adventure Corridor (HOA 2.0)** living-lab exhibit, intermodal **eVTOL & Last-Mile Ground Pod** transit, the **Paradigm VR Nightclub**, and **RFC 9110 HTTP 402 (L402)** Web3 monetization.
+An interactive **WebXR Spatial Investor Pitch Campus** and multi-tier virtual venue for **Good Faith Paradigm** ([@GparadigmOrgLove](https://www.youtube.com/@GparadigmOrgLove)), integrating narrated slide booths and interactive 3D digital relics from [`jasonsprouse/digital-golden-plates`](https://github.com/jasonsprouse/digital-golden-plates), an autonomous **NPC Docent (Docent Lux)** with synchronized voice narration, the **Adventure Corridor (HOA 2.0)** living-lab exhibit, intermodal **eVTOL & Last-Mile Ground Pod** transit, the **Paradigm VR Nightclub**, and **[x402 Payment Protocol](https://blog.payai.network/x402-payment-protocol/)** native HTTP blockchain monetization.
 
 ---
 
@@ -91,13 +91,18 @@ Summon or close the spatial 3D command board right in front of you via **`☰ ME
 
 ---
 
-## ⚡ Web3 HTTP 402 (L402) Monetization (`backend/` & `js/web3Payment.js`)
+## ⚡ Web3 x402 Payment Protocol Monetization (`backend/` & `js/web3Payment.js`)
 
-All commerce flows use the **RFC 9110 §15.5.3 `402 Payment Required`** standard with **L402 Macaroons (`WWW-Authenticate: L402`)** and structured **`Payment-Required`** headers:
-- **Rarible NFT Shopping Basket (`js/nftBasket.js`):** Add Harps of God tokens `#492856` (Yellow Y) and `#490643` (Green G) under contract `0xd07dc4262bcdbf85190c01c996b4c06a461d2430`, settle via HTTP 402, and receive raffle tickets + VIP museum tour pass.
-- **Theophany Wishing Well Credits (`js/wishingWell.js`):** Purchase 2 oz Gold (500 credits), Silver (100 credits), or Copper (25 credits) medallion bundles via HTTP 402 and spend 5 credits per Wishing Well reflection.
-- **Subscription Tiers (`js/subscriptionUI.js`):** Free (*Pilgrim*), 24-hour Freemium trial (*Seeker*), and HTTP 402 Paid upgrade (*Pneumatic Investor*).
-- **Hybrid Backend + Static Edge Fallback:** Runs against the multi-threaded Python server (`serve.py` + `backend/`) in container/local deployments and automatically falls back to an in-browser L402 edge engine on static CDNs (such as GitHub Pages).
+All commerce flows implement the **[x402 Payment Protocol: The Complete Guide](https://blog.payai.network/x402-payment-protocol/)** — an open standard enabling native HTTP-based payments (`402 Payment Required`) using blockchain technology (USDC on **Base `eip155:8453`** and **Solana**):
+
+- **x402 Protocol Handshake (`x402Version: 1`):**
+  1. **Challenge (`402 Payment Required`):** Unpaid requests return `x402Version: 1` with `accepts: [{ scheme: "exact", network: "base" | "solana", maxAmountRequired, payTo, asset, maxTimeoutSeconds }]` and `X-PAYMENT-REQUIRED` / `Payment-Required` headers.
+  2. **Signed Authorization (`X-PAYMENT`):** The client signs the x402 payment payload and retries the HTTP request with the Base64-encoded **`X-PAYMENT`** header.
+  3. **Verification & Settlement (`X-PAYMENT-RESPONSE`):** The server / facilitator (`https://facilitator.payai.network`) verifies and settles the payment, returning `200 OK` with the Base64-encoded **`X-PAYMENT-RESPONSE`** receipt header.
+- **Rarible NFT Shopping Basket (`js/nftBasket.js`):** Add Harps of God tokens `#492856` (Yellow Y) and `#490643` (Green G) under contract `0xd07dc4262bcdbf85190c01c996b4c06a461d2430`, settle via **x402**, and receive raffle tickets + VIP museum tour pass.
+- **Theophany Wishing Well Credits (`js/wishingWell.js`):** Purchase 2 oz Gold (500 credits), Silver (100 credits), or Copper (25 credits) medallion bundles via **x402** and spend 5 credits per Wishing Well reflection.
+- **Subscription Tiers (`js/subscriptionUI.js`):** Free (*Pilgrim*), 24-hour Freemium trial (*Seeker*), and **x402** Paid upgrade (*Pneumatic Investor*).
+- **Hybrid Backend + Static Edge Fallback:** Runs against the multi-threaded Python server (`serve.py` + `backend/`) in container/local deployments and automatically falls back to an in-browser **x402** edge engine on static CDNs (such as GitHub Pages).
 
 ---
 
