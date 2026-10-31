@@ -29,6 +29,10 @@ export class AudioManager {
     // Web Audio Visualizer Analyzer
     this.audioCtx = null;
     this.analyser = null;
+    this.voiceGain = null;
+    this.voiceBufferCache = new Map();
+    this.activeVoiceSource = null;
+    this._unlockedBuffer = false;
     this.frequencyData = new Uint8Array(64);
     this.timeDomainData = new Uint8Array(64);
     this.lastBeatTime = 0;
@@ -110,12 +114,159 @@ export class AudioManager {
     this.timeDomainData = new Uint8Array(this.analyser.frequencyBinCount);
 
     this.analyser.connect(this.audioCtx.destination);
+
+    // Dedicated voice narration channel routed directly to WebXR headset destination
+    this.voiceGain = this.audioCtx.createGain();
+    this.voiceGain.gain.value = 1.35;
+    this.voiceGain.connect(this.audioCtx.destination);
   }
 
   resumeAudioContext() {
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume();
+    if (!this.audioCtx) this.initWebAudio();
+    if (!this.audioCtx) return;
+    if (this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume().catch(() => {});
     }
+    if (!this._unlockedBuffer && this.audioCtx.state === 'running') {
+      this._unlockedBuffer = true;
+      try {
+        const silent = this.audioCtx.createBuffer(1, 1, 22050);
+        const src = this.audioCtx.createBufferSource();
+        src.buffer = silent;
+        src.connect(this.audioCtx.destination);
+        src.start(0);
+      } catch (e) {}
+    }
+  }
+
+  decodeWavPcmFallback(arrayBuffer) {
+    if (!this.audioCtx) return null;
+    const view = new DataView(arrayBuffer);
+    if (view.byteLength < 44) return null;
+    let offset = 12;
+    let channels = 1;
+    let sampleRate = 22050;
+    let bitsPerSample = 16;
+    let dataOffset = 44;
+    let dataLength = view.byteLength - 44;
+
+    while (offset + 8 <= view.byteLength) {
+      const chunkId = String.fromCharCode(
+        view.getUint8(offset),
+        view.getUint8(offset + 1),
+        view.getUint8(offset + 2),
+        view.getUint8(offset + 3)
+      );
+      const chunkSize = view.getUint32(offset + 4, true);
+      if (chunkId === 'fmt ') {
+        channels = view.getUint16(offset + 10, true) || 1;
+        sampleRate = view.getUint32(offset + 12, true) || 22050;
+        bitsPerSample = view.getUint16(offset + 22, true) || 16;
+      } else if (chunkId === 'data') {
+        dataOffset = offset + 8;
+        dataLength = Math.min(chunkSize, view.byteLength - dataOffset);
+        break;
+      }
+      offset += 8 + chunkSize + (chunkSize % 2);
+    }
+
+    const bytesPerSample = Math.max(1, bitsPerSample >> 3);
+    const frameCount = Math.floor(dataLength / (bytesPerSample * channels));
+    if (frameCount <= 0) return null;
+
+    const audioBuffer = this.audioCtx.createBuffer(channels, frameCount, sampleRate);
+    for (let ch = 0; ch < channels; ch++) {
+      const channelData = audioBuffer.getChannelData(ch);
+      for (let i = 0; i < frameCount; i++) {
+        const samplePos = dataOffset + (i * channels + ch) * bytesPerSample;
+        if (bitsPerSample === 16) {
+          channelData[i] = view.getInt16(samplePos, true) / 32768.0;
+        } else if (bitsPerSample === 8) {
+          channelData[i] = (view.getUint8(samplePos) - 128) / 128.0;
+        }
+      }
+    }
+    return audioBuffer;
+  }
+
+  async loadVoiceBuffer(url) {
+    if (this.voiceBufferCache.has(url)) {
+      return this.voiceBufferCache.get(url);
+    }
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+    const arrayBuf = await resp.arrayBuffer();
+    if (!this.audioCtx) this.initWebAudio();
+    let decoded = null;
+    try {
+      decoded = await this.audioCtx.decodeAudioData(arrayBuf.slice(0));
+    } catch (err) {
+      decoded = this.decodeWavPcmFallback(arrayBuf);
+    }
+    if (!decoded) throw new Error(`Failed to decode audio buffer for ${url}`);
+    this.voiceBufferCache.set(url, decoded);
+    return decoded;
+  }
+
+  stopVoiceFile() {
+    if (this.activeVoiceSource) {
+      try {
+        this.activeVoiceSource.onended = null;
+        this.activeVoiceSource.stop(0);
+        this.activeVoiceSource.disconnect();
+      } catch (e) {}
+      this.activeVoiceSource = null;
+    }
+  }
+
+  playVoiceFile(url, { onEnded, onError } = {}) {
+    this.stopVoiceFile();
+    this.resumeAudioContext();
+    if (!this.audioCtx) {
+      if (onError) onError(new Error('No AudioContext'));
+      return () => {};
+    }
+
+    let cancelled = false;
+    let sourceNode = null;
+
+    this.loadVoiceBuffer(url)
+      .then(async (buffer) => {
+        if (cancelled) return;
+        if (this.audioCtx.state === 'suspended') {
+          try { await this.audioCtx.resume(); } catch (e) {}
+        }
+        if (cancelled) return;
+        sourceNode = this.audioCtx.createBufferSource();
+        sourceNode.buffer = buffer;
+        sourceNode.connect(this.voiceGain || this.audioCtx.destination);
+        this.activeVoiceSource = sourceNode;
+        sourceNode.onended = () => {
+          if (this.activeVoiceSource === sourceNode) {
+            this.activeVoiceSource = null;
+          }
+          if (!cancelled && onEnded) onEnded();
+        };
+        sourceNode.start(0);
+      })
+      .catch((err) => {
+        if (!cancelled && onError) onError(err);
+      });
+
+    return () => {
+      cancelled = true;
+      if (sourceNode) {
+        try {
+          sourceNode.onended = null;
+          sourceNode.stop(0);
+          sourceNode.disconnect();
+        } catch (e) {}
+        if (this.activeVoiceSource === sourceNode) {
+          this.activeVoiceSource = null;
+        }
+        sourceNode = null;
+      }
+    };
   }
 
   attachRoomVideo(videoEl) {

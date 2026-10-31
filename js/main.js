@@ -61,12 +61,22 @@ class App {
 
     // WebXR VR Button
     const vrButton = VRButton.createButton(this.renderer);
+    const unlockVRVoice = () => {
+      if (this.audioManager) this.audioManager.resumeAudioContext();
+      if (this.docent) this.docent.unlockVoice();
+    };
+    vrButton.addEventListener('pointerdown', unlockVRVoice, { passive: true });
+    vrButton.addEventListener('click', unlockVRVoice, { passive: true });
     document.body.appendChild(vrButton);
 
     this.renderer.xr.addEventListener('sessionstart', () => {
+      unlockVRVoice();
       document.getElementById('hud-overlay').style.display = 'none';
       document.getElementById('instructions-modal').classList.add('hidden');
-      setTimeout(() => this.docent && this.docent.greet(), 2500);
+      setTimeout(() => {
+        unlockVRVoice();
+        if (this.docent) this.docent.greet(true);
+      }, 1200);
     });
 
     this.renderer.xr.addEventListener('sessionend', () => {
@@ -86,6 +96,7 @@ class App {
     this.vtolManager = new VTOLManager(this.scene);
     this.mobilityManager = new MobilityManager(this.scene);
     this.boothManager = new BoothManager(this.scene, {
+      audioManager: this.audioManager,
       onNarrationChange: (active) => this.setVoiceSource('booth', active),
       onOpenLink: (url) => this.openBoothLink(url),
       onNotify: (msg) => this.showHUDNotification(msg)
@@ -110,6 +121,7 @@ class App {
     this.adventureKiosk = new AdventureKiosk(this.scene, {
       position: [9.0, 30.0, 14.5],
       rotY: -Math.PI / 10,
+      audioManager: this.audioManager,
       onOpenLink: (url) => this.openBoothLink(url),
       onNotify: (msg) => this.showHUDNotification(msg),
       onNarrationChange: (active) => this.setVoiceSource('adventure', active)
@@ -121,6 +133,7 @@ class App {
       boothManager: this.boothManager,
       relicPavilion: this.relicPavilion,
       adventureKiosk: this.adventureKiosk,
+      audioManager: this.audioManager,
       onVoiceChange: (active) => this.setVoiceSource('docent', active),
       onNotify: (msg) => this.showHUDNotification(msg)
     });
@@ -295,6 +308,7 @@ class App {
   }
 
   handleAction(action) {
+    if (this.audioManager) this.audioManager.resumeAudioContext();
     if (this.docent) this.docent.unlockVoice();
 
     if (typeof action === 'string' && action.startsWith('teleport:')) {

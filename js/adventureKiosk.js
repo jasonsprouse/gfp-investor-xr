@@ -163,11 +163,13 @@ export class AdventureKiosk {
   constructor(scene, {
     position = [9.0, 30.0, 14.5],
     rotY = -Math.PI / 10,
+    audioManager,
     onOpenLink,
     onNotify,
     onNarrationChange
   } = {}) {
     this.scene = scene;
+    this.audioManager = audioManager || null;
     this.onOpenLink = onOpenLink || (() => {});
     this.onNotify = onNotify || (() => {});
     this.onNarrationChange = onNarrationChange || (() => {});
@@ -765,10 +767,23 @@ export class AdventureKiosk {
     const slide = ADVENTURE_SLIDES[index];
     if (!slide) return;
 
+    if (this._stopWebAudio) {
+      try { this._stopWebAudio(); } catch (e) {}
+      this._stopWebAudio = null;
+    }
+
     if (!this.voiceAudio && typeof Audio !== 'undefined') {
       this.voiceAudio = new Audio();
       this.voiceAudio.preload = 'auto';
     }
+
+    const onDone = () => {
+      if (this.autoplay) {
+        this.next();
+      } else {
+        this.stopNarration();
+      }
+    };
 
     const fallbackSynth = () => {
       if (!this.synth) {
@@ -786,11 +801,7 @@ export class AdventureKiosk {
         utterance.pitch = 1.05;
         utterance.onend = () => {
           this.activeUtterance = null;
-          if (this.autoplay) {
-            this.next();
-          } else {
-            this.stopNarration();
-          }
+          onDone();
         };
         utterance.onerror = () => {
           this.activeUtterance = null;
@@ -800,21 +811,21 @@ export class AdventureKiosk {
       }, 60);
     };
 
-    if (this.voiceAudio) {
-      const key = hashSpeechText(slide.speech);
-      this.voiceAudio.onended = () => {
-        if (this.autoplay) {
-          this.next();
-        } else {
-          this.stopNarration();
-        }
-      };
+    const key = hashSpeechText(slide.speech);
+    const wavUrl = `media/docent/${key}.wav`;
+
+    const playHtml = () => {
+      if (!this.voiceAudio) {
+        fallbackSynth();
+        return;
+      }
+      this.voiceAudio.onended = onDone;
       this.voiceAudio.onerror = () => {
         this.voiceAudio.onended = null;
         this.voiceAudio.onerror = null;
         fallbackSynth();
       };
-      this.voiceAudio.src = `media/docent/${key}.wav`;
+      this.voiceAudio.src = wavUrl;
       this.voiceAudio.currentTime = 0;
       this.voiceAudio.volume = 1.0;
       const p = this.voiceAudio.play();
@@ -825,14 +836,31 @@ export class AdventureKiosk {
           fallbackSynth();
         });
       }
+    };
+
+    if (this.audioManager && typeof this.audioManager.playVoiceFile === 'function') {
+      this._stopWebAudio = this.audioManager.playVoiceFile(wavUrl, {
+        onEnded: () => {
+          this._stopWebAudio = null;
+          onDone();
+        },
+        onError: () => {
+          this._stopWebAudio = null;
+          playHtml();
+        }
+      });
     } else {
-      fallbackSynth();
+      playHtml();
     }
   }
 
   stopNarration() {
     this.narrating = false;
     this.activeUtterance = null;
+    if (this._stopWebAudio) {
+      try { this._stopWebAudio(); } catch (e) {}
+      this._stopWebAudio = null;
+    }
     if (this.voiceAudio) {
       try {
         this.voiceAudio.onended = null;

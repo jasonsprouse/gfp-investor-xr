@@ -35,14 +35,15 @@ function wrapText(ctx, text, maxWidth) {
  * Actions are routed through `handleAction('booth:<id>:<command>')`.
  */
 export class BoothManager {
-  constructor(scene, { onNarrationChange, onOpenLink, onNotify } = {}) {
+  constructor(scene, { audioManager, onNarrationChange, onOpenLink, onNotify } = {}) {
     this.scene = scene;
+    this.audioManager = audioManager || null;
     this.onNarrationChange = onNarrationChange || (() => {});
     this.onOpenLink = onOpenLink || (() => {});
     this.onNotify = onNotify || (() => {});
     this.booths = [];
     this.interactableObjects = [];
-    this.maxInteractDistance = 18;
+    this.maxInteractDistance = 35;
     this.anyNarrating = false;
     this.imageCache = new Map();
 
@@ -516,26 +517,52 @@ export class BoothManager {
     if (!booth.def.narration) return;
     // Only one booth speaks at a time
     this.booths.forEach((b) => { if (b !== booth && b.narrating) this.stopNarration(b); });
-    const audio = this.ensureAudio(booth);
-    audio.src = `${booth.def.mediaDir}/slide_${pad2(booth.index + 1)}.mp3`;
-    audio.volume = 1;
+    if (booth._stopWebAudio) {
+      try { booth._stopWebAudio(); } catch (e) {}
+      booth._stopWebAudio = null;
+    }
+    const mp3Url = `${booth.def.mediaDir}/slide_${pad2(booth.index + 1)}.mp3`;
     booth.narrating = true;
     this.drawLabel(booth, 'toggle', 'PAUSE');
     this.drawCaption(booth);
     this.refreshNarrationState();
-    const p = audio.play();
-    if (p && p.catch) {
-      p.catch(() => {
-        booth.narrating = false;
-        this.drawLabel(booth, 'toggle', 'PLAY');
-        this.drawCaption(booth);
-        this.refreshNarrationState();
-        this.onNotify('Narration blocked by the browser - click ENTER first, then press PLAY again');
+
+    const playHtmlFallback = () => {
+      const audio = this.ensureAudio(booth);
+      audio.src = mp3Url;
+      audio.volume = 1;
+      const p = audio.play();
+      if (p && p.catch) {
+        p.catch(() => {
+          booth.narrating = false;
+          this.drawLabel(booth, 'toggle', 'PLAY');
+          this.drawCaption(booth);
+          this.refreshNarrationState();
+        });
+      }
+    };
+
+    if (this.audioManager && typeof this.audioManager.playVoiceFile === 'function') {
+      booth._stopWebAudio = this.audioManager.playVoiceFile(mp3Url, {
+        onEnded: () => {
+          booth._stopWebAudio = null;
+          this.onNarrationEnded(booth);
+        },
+        onError: () => {
+          booth._stopWebAudio = null;
+          playHtmlFallback();
+        }
       });
+    } else {
+      playHtmlFallback();
     }
   }
 
   stopNarration(booth) {
+    if (booth._stopWebAudio) {
+      try { booth._stopWebAudio(); } catch (e) {}
+      booth._stopWebAudio = null;
+    }
     if (booth.audio) booth.audio.pause();
     booth.narrating = false;
     if (booth.def.narration) this.drawLabel(booth, 'toggle', 'PLAY');
