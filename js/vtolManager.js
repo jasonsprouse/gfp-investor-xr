@@ -105,15 +105,13 @@ export class VTOLManager {
     tailWing.position.set(0, 1.9, 3.8);
     this.vtolGroup.add(tailWing);
 
-    // 2. Panoramic Tinted Cockpit Glass
-    const glassMat = new THREE.MeshPhysicalMaterial({
+    // 2. Panoramic Tinted Cockpit Glass (Standard transparent material avoids expensive stereo WebXR transmission pass)
+    const glassMat = new THREE.MeshStandardMaterial({
       color: 0x05182e,
-      metalness: 0.1,
-      roughness: 0.05,
-      transmission: 0.85,
+      metalness: 0.25,
+      roughness: 0.12,
       transparent: true,
-      opacity: 0.92,
-      ior: 1.5
+      opacity: 0.45
     });
     const canopyGeo = new THREE.SphereGeometry(1.25, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.45);
     const canopy = new THREE.Mesh(canopyGeo, glassMat);
@@ -370,10 +368,19 @@ export class VTOLManager {
       this.lights[0].material.color.setHex((Math.sin(time * 6) > 0.8) ? 0xffffff : 0x222222);
     }
 
-    this.updateAvionics(time);
+    // If not piloted and stationary, skip per-frame 512x256 canvas redraw & GPU texture upload
+    if (!this.isPiloting && this.state !== 'FLYING') {
+      if (!this._initialAvionicsRendered) {
+        this._initialAvionicsRendered = true;
+        this.updateAvionics(time);
+      }
+      return;
+    }
 
-    // If not piloted and stationary, do nothing further
-    if (!this.isPiloting && this.state !== 'FLYING') return;
+    if (time - (this._lastAvionicsTime || 0) > 0.2) {
+      this._lastAvionicsTime = time;
+      this.updateAvionics(time);
+    }
 
     // 3. Automated Navigation Assist / Manual Hybrid Control
     // Determine target waypoint based on destination

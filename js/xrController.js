@@ -12,6 +12,11 @@ export class XRControllerManager {
     this.controllers = [];
     this.raycaster = new THREE.Raycaster();
     this.tempMatrix = new THREE.Matrix4();
+    this._zAxis = new THREE.Vector3(0, 0, 1);
+    this._forwardVec = new THREE.Vector3();
+    this._rightVec = new THREE.Vector3();
+    this._raycastFrame = 0;
+    this.wristMeshes = new Set();
 
     // Hardware Button Polling States
     this.buttonStates = {};
@@ -231,6 +236,9 @@ export class XRControllerManager {
 
     grip.add(remoteGroup);
     this.handheldRemote = remoteGroup;
+    remoteGroup.traverse((child) => {
+      if (child.isMesh) this.wristMeshes.add(child);
+    });
     this.renderHandheldRemote('Sanctuary of Sound', true);
   }
 
@@ -484,15 +492,28 @@ export class XRControllerManager {
     }
   }
 
+  getVisibleInteractables(controllerIndex) {
+    const isLeftWristOwner = (controllerIndex === 1);
+    const out = [];
+    const list = this.interactableObjects;
+    for (let i = 0; i < list.length; i++) {
+      const obj = list[i];
+      if (!obj || !obj.visible) continue;
+      if (isLeftWristOwner && this.wristMeshes.has(obj)) continue;
+      out.push(obj);
+    }
+    return out;
+  }
+
   onSelectStart(controller) {
     controller.userData.isSelecting = true;
     this.tempMatrix.identity().extractRotation(controller.matrixWorld);
     this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-    this.raycaster.far = 50; // Extend raycast range to 50 meters
+    this.raycaster.far = 35;
 
-    // Check interaction with in-room video screen, DJ buttons, or handheld remote
-    const intersects = this.raycaster.intersectObjects(this.interactableObjects, true);
+    const candidates = this.getVisibleInteractables(controller.userData.index);
+    const intersects = this.raycaster.intersectObjects(candidates, true);
     if (intersects.length > 0) {
       const hit = intersects[0].object;
       this.triggerHaptic(controller.userData.index);
@@ -551,29 +572,34 @@ export class XRControllerManager {
       this.renderHandheldRemote(videoTitle, isPlaying, playerState);
     }
 
-    // 2. Continuous Dynamic Laser Pointer & Screen Target Reticle
-    this.controllers.forEach((c) => {
-      this.tempMatrix.identity().extractRotation(c.controller.matrixWorld);
-      this.raycaster.ray.origin.setFromMatrixPosition(c.controller.matrixWorld);
-      this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-      this.raycaster.far = 50;
+    // 2. Throttled Dynamic Laser Pointer & Target Reticle (runs every 3rd frame to eliminate 90Hz raycast jitter)
+    this._raycastFrame = (this._raycastFrame + 1) % 3;
+    if (this._raycastFrame === 0) {
+      const candidates0 = this.getVisibleInteractables(0);
+      const candidates1 = this.getVisibleInteractables(1);
+      this.controllers.forEach((c, idx) => {
+        this.tempMatrix.identity().extractRotation(c.controller.matrixWorld);
+        this.raycaster.ray.origin.setFromMatrixPosition(c.controller.matrixWorld);
+        this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+        this.raycaster.far = 30;
 
-      const hitInteractables = this.raycaster.intersectObjects(this.interactableObjects, true);
-      if (hitInteractables.length > 0) {
-        const hit = hitInteractables[0];
-        c.laser.scale.z = hit.distance;
-        c.reticle.position.copy(hit.point);
-        if (hit.face) {
-          c.reticle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hit.face.normal);
+        const hitInteractables = this.raycaster.intersectObjects(idx === 1 ? candidates1 : candidates0, true);
+        if (hitInteractables.length > 0) {
+          const hit = hitInteractables[0];
+          c.laser.scale.z = hit.distance;
+          c.reticle.position.copy(hit.point);
+          if (hit.face) {
+            c.reticle.quaternion.setFromUnitVectors(this._zAxis, hit.face.normal);
+          }
+          c.reticle.visible = true;
+          c.laser.material.color.setHex(0xff007f);
+        } else {
+          c.reticle.visible = false;
+          c.laser.scale.z = 18;
+          c.laser.material.color.setHex(c.defaultColor);
         }
-        c.reticle.visible = true;
-        c.laser.material.color.setHex(0xff007f); // Neon pink when locked onto screen, button, or vehicle
-      } else {
-        c.reticle.visible = false;
-        c.laser.scale.z = 25;
-        c.laser.material.color.setHex(c.defaultColor);
-      }
-    });
+      });
+    }
 
     // 3. Hardware Gamepad Buttons directly controlling video screen & vehicles
     for (const source of session.inputSources) {
@@ -651,16 +677,25 @@ export class XRControllerManager {
         const stickY = axes[3] || 0;
 
         if (playerState === 'WALKING') {
-          // Left hand thumbstick: Smooth Locomotion
+          // Left hand thumbstick: Gimbal-lock-free world-space Smooth Locomotion
           if (source.handedness === 'left' || (session.inputSources.length === 1 && source.handedness !== 'right')) {
             if (Math.abs(stickX) > 0.15 || Math.abs(stickY) > 0.15) {
               const speed = 4.2 * delta;
-              const cameraYaw = this.camera.rotation.y;
-              const dirX = stickX * Math.cos(cameraYaw) + stickY * Math.sin(cameraYaw);
-              const dirZ = -stickX * Math.sin(cameraYaw) + stickY * Math.cos(cameraYaw);
+              this.camera.getWorldDirection(this._forwardVec);
+              this._forwardVec.y = 0;
+              if (this._forwardVec.lengthSq() > 0.0001) {
+                this._forwardVec.normalize();
+              } else {
+                this._forwardVec.set(0, 0, -1);
+              }
+              // Right vector perpendicular to forward on XZ plane
+              this._rightVec.set(-this._forwardVec.z, 0, this._forwardVec.x);
 
-              this.dolly.position.x += dirX * speed;
-              this.dolly.position.z += dirZ * speed;
+              const moveX = (this._rightVec.x * stickX + this._forwardVec.x * (-stickY)) * speed;
+              const moveZ = (this._rightVec.z * stickX + this._forwardVec.z * (-stickY)) * speed;
+
+              this.dolly.position.x += moveX;
+              this.dolly.position.z += moveZ;
 
               // Bounds clamping based on platform altitude
               if (this.dolly.position.y >= 20.0) {

@@ -52,11 +52,10 @@ class App {
     // 3. Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = false;
     this.renderer.xr.enabled = true;
     this.container.appendChild(this.renderer.domElement);
 
@@ -628,6 +627,19 @@ class App {
     };
   }
 
+  orientPlayerLookAt(x, y, z) {
+    if (this.renderer && this.renderer.xr && this.renderer.xr.isPresenting) {
+      // In WebXR, mutating camera rotation fights the headset pose tracker and causes jitter.
+      // Rotate the dolly rig around Y instead.
+      const dx = x - this.dolly.position.x;
+      const dz = z - this.dolly.position.z;
+      this.dolly.rotation.y = Math.atan2(-dx, -dz);
+    } else {
+      this.dolly.rotation.y = 0;
+      this.camera.lookAt(x, y, z);
+    }
+  }
+
   teleportToPreset(view) {
     if (this.playerState !== 'WALKING') {
       this.handleAction('exit_vehicle');
@@ -639,7 +651,7 @@ class App {
         const stand = this.boothManager.getStandPoint(booth);
         this.dolly.position.set(stand.x, 30.0, stand.z);
         const look = booth.group.localToWorld(new THREE.Vector3(0, 2.1, -1.9));
-        this.camera.lookAt(look);
+        this.orientPlayerLookAt(look.x, look.y, look.z);
         this.showHUDNotification(`Teleported to ${booth.def.title}`);
       }
       return;
@@ -647,41 +659,41 @@ class App {
 
     if (view === 'adventure') {
       this.dolly.position.set(7.5, 30.0, 18.0);
-      this.camera.lookAt(9.0, 31.8, 14.2);
+      this.orientPlayerLookAt(9.0, 31.8, 14.2);
     } else if (view === 'skyport') {
       this.dolly.position.set(0, 30.0, 22);
-      this.camera.lookAt(0, 34.0, 12);
+      this.orientPlayerLookAt(0, 34.0, 12);
     } else if (view === 'relics') {
       this.dolly.position.set(0, 30.0, 22.4);
-      this.camera.lookAt(0, 31.3, 28.5);
+      this.orientPlayerLookAt(0, 31.3, 28.5);
     } else if (view === 'docent') {
       this.dolly.position.set(0, 30.0, 20.6);
-      this.camera.lookAt(0.6, 31.3, 16.0);
+      this.orientPlayerLookAt(0.6, 31.3, 16.0);
     } else if (view === 'vtol') {
       this.handleAction('board_vtol');
     } else if (view === 'vertiport') {
       this.dolly.position.set(0, 5.2, -135);
-      this.camera.lookAt(0, 5.2, -50);
+      this.orientPlayerLookAt(0, 5.2, -50);
     } else if (view === 'rover') {
       this.handleAction('board_rover');
     } else if (view === 'floor') {
       this.dolly.position.set(0, 0, 3);
-      this.camera.lookAt(0, 2, -14);
+      this.orientPlayerLookAt(0, 2, -14);
     } else if (view === 'dj') {
       this.dolly.position.set(0, 1.1, -13.5);
-      this.camera.lookAt(0, 2, 8);
+      this.orientPlayerLookAt(0, 2, 8);
     } else if (view === 'amphi') {
       this.dolly.position.set(24, 0, 12);
-      this.camera.lookAt(24, 2, 0);
+      this.orientPlayerLookAt(24, 2, 0);
     } else if (view === 'showroom') {
       this.dolly.position.set(-24, 0, 12);
-      this.camera.lookAt(-24, 2, 0);
+      this.orientPlayerLookAt(-24, 2, 0);
     } else if (view === 'lounge') {
       this.dolly.position.set(-9, 0, 6);
-      this.camera.lookAt(0, 1.5, -5);
+      this.orientPlayerLookAt(0, 1.5, -5);
     } else if (view === 'bar') {
       this.dolly.position.set(9, 0, 4);
-      this.camera.lookAt(12, 1.5, 4);
+      this.orientPlayerLookAt(12, 1.5, 4);
     }
   }
 
@@ -772,24 +784,29 @@ class App {
       const delta = Math.min(this.clock.getDelta(), 0.1);
       const t = this.clock.getElapsedTime();
 
+      const playerY = this.dolly.position.y;
+      const onSkyport = playerY >= 20.0;
+
       this.audioManager.updateAudioData();
-      this.clubScene.update(delta, t, this.audioManager);
-      if (this.npcManager) {
+      this.clubScene.update(delta, t, this.audioManager, playerY);
+      if (this.npcManager && !onSkyport) {
         this.npcManager.update(delta, t, this.audioManager);
       }
 
-      // Update VTOL Flight & Ground Mobility
-      if (this.relicPavilion) {
-        this.relicPavilion.update(delta, t);
-      }
-      if (this.docent) {
-        this.docent.update(delta, t, this.dolly.position);
-      }
-      if (this.boothManager) {
-        this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
-      }
-      if (this.adventureKiosk) {
-        this.adventureKiosk.update(delta, t);
+      // Update Skyport Exhibits only when on the Skyport deck
+      if (onSkyport) {
+        if (this.relicPavilion) {
+          this.relicPavilion.update(delta, t);
+        }
+        if (this.docent) {
+          this.docent.update(delta, t, this.dolly.position);
+        }
+        if (this.boothManager) {
+          this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
+        }
+        if (this.adventureKiosk) {
+          this.adventureKiosk.update(delta, t);
+        }
       }
       if (this.vtolManager) {
         const vtolThrust = (this.moveForward || this.isAscending);
@@ -863,54 +880,69 @@ class App {
   }
 
   updateTelemetryHUD() {
-    let hud = document.getElementById('vehicle-telemetry-hud');
-    if (!hud) {
-      hud = document.createElement('div');
-      hud.id = 'vehicle-telemetry-hud';
-      hud.className = 'telemetry-badge';
-      document.body.appendChild(hud);
+    if (this.renderer && this.renderer.xr && this.renderer.xr.isPresenting) {
+      return;
     }
 
+    let hud = this._telemetryHudEl;
+    if (!hud) {
+      hud = document.getElementById('vehicle-telemetry-hud');
+      if (!hud) {
+        hud = document.createElement('div');
+        hud.id = 'vehicle-telemetry-hud';
+        hud.className = 'telemetry-badge';
+        document.body.appendChild(hud);
+      }
+      this._telemetryHudEl = hud;
+    }
+
+    let nextHtml = null;
+
     if (this.playerState === 'VTOL_PILOT' && this.vtolManager) {
-      hud.style.display = 'block';
       const spd = (this.vtolManager.airspeed * 3.6).toFixed(0);
       const alt = this.vtolManager.vtolGroup.position.y.toFixed(1);
-      hud.innerHTML = `<span class="badge-icon">✈</span> <strong>eVTOL FLIGHT</strong> &bull; ALT: ${alt}m &bull; SPD: ${spd} km/h <span class="badge-hint">[E: EXIT]</span>`;
+      nextHtml = `<span class="badge-icon">✈</span> <strong>eVTOL FLIGHT</strong> &bull; ALT: ${alt}m &bull; SPD: ${spd} km/h <span class="badge-hint">[E: EXIT]</span>`;
     } else if (this.playerState === 'LAST_MILE_DRIVER' && this.mobilityManager) {
-      hud.style.display = 'block';
       const spd = (this.mobilityManager.speed * 3.6).toFixed(0);
-      hud.innerHTML = `<span class="badge-icon">🚗</span> <strong>GROUND ROVER</strong> &bull; SPD: ${spd} km/h <span class="badge-hint">[E: EXIT]</span>`;
+      nextHtml = `<span class="badge-icon">🚗</span> <strong>GROUND ROVER</strong> &bull; SPD: ${spd} km/h <span class="badge-hint">[E: EXIT]</span>`;
     } else {
       const vtolDist = this.vtolManager ? this.dolly.position.distanceTo(this.vtolManager.vtolGroup.position) : 999;
       const roverDist = this.mobilityManager ? this.dolly.position.distanceTo(this.mobilityManager.roverGroup.position) : 999;
 
       if (vtolDist < 6.5) {
-        hud.style.display = 'block';
-        hud.innerHTML = `<span class="badge-icon">✈</span> <strong>AERO-VTOL READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO BOARD</span>`;
+        nextHtml = `<span class="badge-icon">✈</span> <strong>AERO-VTOL READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO BOARD</span>`;
       } else if (roverDist < 5.5) {
-        hud.style.display = 'block';
-        hud.innerHTML = `<span class="badge-icon">🚗</span> <strong>LAST-MILE POD READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO DRIVE</span>`;
+        nextHtml = `<span class="badge-icon">🚗</span> <strong>LAST-MILE POD READY</strong> &bull; <span class="badge-action">PRESS [E] OR CLICK TO DRIVE</span>`;
       } else {
         const booth = this.boothManager ? this.boothManager.getNearbyBooth(this.dolly.position, 7.5) : null;
         const cluster = this.relicPavilion ? this.relicPavilion.getNearbyCluster(this.dolly.position, 3.6) : null;
         if (booth) {
-          hud.style.display = 'block';
           const hasNarr = booth.def.narration;
           const viewHint = booth.views && booth.views.length > 1 ? ' &nbsp;[B] VIEW' : '';
-          hud.innerHTML = `<span class="badge-icon">\u{1F4FD}</span> <strong>${booth.def.title}</strong> &bull; <span class="badge-action">${hasNarr ? '[X] NARRATE' : '[X] NEXT'} &nbsp;[Z] PREV &nbsp;[C] NEXT${viewHint} &nbsp;[L] LINK &nbsp;[H] DOCENT</span>`;
+          nextHtml = `<span class="badge-icon">\u{1F4FD}</span> <strong>${booth.def.title}</strong> &bull; <span class="badge-action">${hasNarr ? '[X] NARRATE' : '[X] NEXT'} &nbsp;[Z] PREV &nbsp;[C] NEXT${viewHint} &nbsp;[L] LINK &nbsp;[H] DOCENT</span>`;
         } else if (cluster) {
-          hud.style.display = 'block';
-          hud.innerHTML = `<span class="badge-icon">\u2728</span> <strong>${cluster.title}</strong> &bull; <span class="badge-action">${cluster.hint.toUpperCase()} &nbsp;[H] DOCENT EXPLAINS</span>`;
+          nextHtml = `<span class="badge-icon">\u2728</span> <strong>${cluster.title}</strong> &bull; <span class="badge-action">${cluster.hint.toUpperCase()} &nbsp;[H] DOCENT EXPLAINS</span>`;
         } else if (this.adventureKiosk && Math.hypot(this.dolly.position.x - 9.0, this.dolly.position.z - 14.5) < 5.0) {
-          hud.style.display = 'block';
-          hud.innerHTML = `<span class="badge-icon">\u{1F310}</span> <strong>ADVENTURE CORRIDOR</strong> &bull; <span class="badge-action">CLICK PEDESTAL BUTTONS &nbsp;[H] DOCENT EXPLAINS</span>`;
+          nextHtml = `<span class="badge-icon">\u{1F310}</span> <strong>ADVENTURE CORRIDOR</strong> &bull; <span class="badge-action">CLICK PEDESTAL BUTTONS &nbsp;[H] DOCENT EXPLAINS</span>`;
         } else if (this.docent && this.docent.isNearKiosk(this.dolly.position)) {
-          hud.style.display = 'block';
-          hud.innerHTML = `<span class="badge-icon">\u{1F9ED}</span> <strong>DOCENT LUX</strong> &bull; <span class="badge-action">[T] TOUR &nbsp;[H] EXPLAIN NEAREST &nbsp;OR USE THE KIOSK</span>`;
-        } else {
-          hud.style.display = 'none';
+          nextHtml = `<span class="badge-icon">\u{1F9ED}</span> <strong>DOCENT LUX</strong> &bull; <span class="badge-action">[T] TOUR &nbsp;[H] EXPLAIN NEAREST &nbsp;OR USE THE KIOSK</span>`;
         }
       }
+    }
+
+    if (nextHtml) {
+      if (this._lastHudVisible !== true) {
+        hud.style.display = 'block';
+        this._lastHudVisible = true;
+      }
+      if (this._lastHudHtml !== nextHtml) {
+        hud.innerHTML = nextHtml;
+        this._lastHudHtml = nextHtml;
+      }
+    } else if (this._lastHudVisible !== false) {
+      hud.style.display = 'none';
+      this._lastHudVisible = false;
+      this._lastHudHtml = null;
     }
   }
 

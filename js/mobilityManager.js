@@ -43,13 +43,12 @@ export class MobilityManager {
       emissiveIntensity: 0.7,
       roughness: 0.3
     });
-    const glassMat = new THREE.MeshPhysicalMaterial({
+    const glassMat = new THREE.MeshStandardMaterial({
       color: 0x081528,
-      metalness: 0.1,
-      roughness: 0.1,
-      transmission: 0.82,
+      metalness: 0.25,
+      roughness: 0.15,
       transparent: true,
-      opacity: 0.88
+      opacity: 0.45
     });
     const rubberMat = new THREE.MeshStandardMaterial({
       color: 0x181818,

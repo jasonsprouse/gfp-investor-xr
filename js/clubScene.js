@@ -571,10 +571,10 @@ export class ClubScene {
       base.position.set(sx, sy, sz);
       this.scene.add(base);
 
-      // Light source
+      // Light source (shadow map disabled for 90Hz WebXR smoothness; volumetric cone provides visual beam)
       const light = new THREE.SpotLight(spotColors[idx], 12, 35, Math.PI / 8, 0.4, 1.2);
       light.position.set(sx, sy - 0.2, sz);
-      light.castShadow = true;
+      light.castShadow = false;
       this.scene.add(light);
       this.scene.add(light.target);
 
@@ -780,11 +780,25 @@ export class ClubScene {
   }
 
   // --- Animation & Dynamic Audio-Reactivity Update ---
-  update(delta, time, audioManager) {
+  update(delta, time, audioManager, playerY = 0) {
+    const pulse = audioManager ? audioManager.getBeatPulse() : 0;
+
+    if (this.skyportHaloMat) {
+      this.skyportHaloMat.opacity = 0.35 + pulse * 0.45;
+    }
+
+    if (this.screenMat && this.screenMat.map === this.screenTexture) {
+      this.renderBigScreen(time, audioManager);
+    }
+
+    // When the visitor is up on the Skyport deck (Y >= 20), skip updating the indoor club 30m below
+    if (playerY >= 20.0) {
+      return;
+    }
+
     const bass = audioManager ? audioManager.getBass() : 0;
     const mid = audioManager ? audioManager.getMid() : 0;
     const treble = audioManager ? audioManager.getTreble() : 0;
-    const pulse = audioManager ? audioManager.getBeatPulse() : 0;
 
     // 1. Rotate Turntable platters
     this.turntablePlatters.forEach((p) => {
@@ -879,21 +893,7 @@ export class ClubScene {
 
     // 9. Pulsating Bias-Lighting Halo around Video Screen
     if (this.haloMat && audioManager) {
-      const pulse = audioManager.getBeatPulse();
       this.haloMat.opacity = 0.35 + pulse * 0.45;
-      if (this.skyportHaloMat) {
-        this.skyportHaloMat.opacity = 0.35 + pulse * 0.45;
-      }
-    }
-
-    // 10. Render Canvas Visualizer if active
-    if (this.screenMat && this.screenMat.map === this.screenTexture) {
-      this.renderBigScreen(time, audioManager);
-    }
-
-    // 11. Update Adventure Corridor Kiosk if attached
-    if (this.adventureKiosk) {
-      this.adventureKiosk.update(delta, time);
     }
   }
 
@@ -1102,13 +1102,12 @@ export class ClubScene {
     adventureAccentLight.position.set(9.0, deckY + 3.2, 14.5);
     this.scene.add(adventureAccentLight);
 
-    const glassBalustradeMat = new THREE.MeshPhysicalMaterial({
+    const glassBalustradeMat = new THREE.MeshStandardMaterial({
       color: 0x00f0ff,
       transparent: true,
-      opacity: 0.28,
-      roughness: 0.1,
-      metalness: 0.2,
-      transmission: 0.8
+      opacity: 0.24,
+      roughness: 0.15,
+      metalness: 0.25
     });
     const railingPositions = [
       { x: -deckW / 2, z: deckZ, w: 0.1, l: deckL },
@@ -1452,13 +1451,12 @@ export class ClubScene {
 
     // 3. Passenger Arrival Terminal Pavilion
     const termGeo = new THREE.BoxGeometry(10, 4.5, 7);
-    const termGlass = new THREE.MeshPhysicalMaterial({
+    const termGlass = new THREE.MeshStandardMaterial({
       color: 0x05152a,
       transparent: true,
       opacity: 0.35,
-      metalness: 0.2,
-      roughness: 0.1,
-      transmission: 0.75
+      metalness: 0.25,
+      roughness: 0.15
     });
     const terminal = new THREE.Mesh(termGeo, termGlass);
     terminal.position.set(-9.0, portY + 2.25, portZ + 8.0);
@@ -1688,12 +1686,12 @@ export class ClubScene {
     this.walkableFloors.push(showFloor);
 
     // Glass Walls
-    const glassMat = new THREE.MeshPhysicalMaterial({
+    const glassMat = new THREE.MeshStandardMaterial({
       color: 0x00f0ff,
       transparent: true,
-      opacity: 0.25,
-      transmission: 0.8,
-      roughness: 0.1
+      opacity: 0.22,
+      metalness: 0.25,
+      roughness: 0.15
     });
     const glassBox = new THREE.Mesh(new THREE.BoxGeometry(16, 6, 16), glassMat);
     glassBox.position.y = 3;
