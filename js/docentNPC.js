@@ -4,6 +4,16 @@ import { STOPS, TOUR_ORDER, RELIC_ORDER, GREETING, NOTHING_NEARBY } from './doce
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+const hashSpeechText = (str) => {
+  const s = String(str).trim().toLowerCase();
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
 /**
  * Docent Lux: a procedural NPC that explains and demonstrates the booths and relics.
  * - Speaks with the browser's speech synthesis (voice optional) and always shows caption bubbles.
@@ -13,16 +23,45 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  */
 export class DocentNPC {
   constructor(scene, npcManager, {
-    boothManager, relicPavilion, home = [0, 30, 16.0], onVoiceChange, onNotify
+    boothManager, relicPavilion, adventureKiosk, home = [0, 30, 16.0], onVoiceChange, onNotify
   } = {}) {
     this.scene = scene;
     this.booths = boothManager;
     this.relics = relicPavilion;
+    this.adventureKiosk = adventureKiosk;
     this.onVoiceChange = onVoiceChange || (() => {});
     this.onNotify = onNotify || (() => {});
     this.deckY = home[1];
     this.home = new THREE.Vector3(home[0], home[1], home[2]);
     this.interactableObjects = [];
+
+    // Register Adventure Corridor tour stop
+    if (!STOPS['adventure']) {
+      STOPS['adventure'] = {
+        at: 'adventure',
+        steps: [
+          { say: [
+            'Here is the Adventure Corridor informational kiosk and living laboratory exhibit.',
+            'This infrastructure is deployed in close proximity to where the foundational Miracles of the Holy Spirit 35-millimeter photographs were taken at the Dallas World Aquarium in December 2005.',
+            'The corridor demonstrates Health Huts for optical visual check-ups, multimodal aerial skyways and ground pods, automated permaculture food security, and HOA 2.0 algorithmic governance.',
+            'Watch as I cycle to the next slide on the cyber-glass display panel.'
+          ] },
+          { act: 'adventure:slide:next' },
+          { wait: 3 },
+          { say: [
+            'You can interact directly with the kiosk console buttons, or press audio brief anytime for full narration.'
+          ] }
+        ]
+      };
+    }
+    if (!TOUR_ORDER.includes('adventure')) {
+      const idx = TOUR_ORDER.indexOf('booth:collector');
+      if (idx !== -1) {
+        TOUR_ORDER.splice(idx + 1, 0, 'adventure');
+      } else {
+        TOUR_ORDER.push('adventure');
+      }
+    }
 
     // --- State machine data ---
     this.queue = [];
@@ -175,14 +214,37 @@ export class DocentNPC {
     const en = voices.filter((v) => /^en/i.test(v.lang));
     const score = (v) => {
       let s = 0;
-      if (/natural|online/i.test(v.name)) s += 3;
+      if (v.localService) s += 4; // Strongly prefer local OS voices to avoid cloud websocket stalls
+      if (/zira|hazel|eva|susan|samantha|victoria|aria|jenny|sonia|libby/i.test(v.name)) s += 3;
       if (/google/i.test(v.name)) s += 2;
-      if (/microsoft (aria|jenny|guy|sonia|libby)/i.test(v.name)) s += 3;
       if (/en-(us|gb)/i.test(v.lang)) s += 1;
       return s;
     };
     en.sort((a, b) => score(b) - score(a));
-    this.voice = en[0] || null;
+    this.voice = en[0] || voices[0] || null;
+  }
+
+  unlockVoice() {
+    if (this._voiceUnlocked) return;
+    this._voiceUnlocked = true;
+    try {
+      if (this.synth) {
+        if (this.synth.paused) this.synth.resume();
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        this.synth.speak(u);
+      }
+    } catch (e) {}
+  }
+
+  ensureVoiceAudio() {
+    if (this.voiceAudio) return this.voiceAudio;
+    if (typeof Audio === 'undefined') return null;
+    const a = new Audio();
+    a.preload = 'auto';
+    a.volume = 1.0;
+    this.voiceAudio = a;
+    return a;
   }
 
   setSpeaking(active) {
@@ -192,9 +254,9 @@ export class DocentNPC {
     }
   }
 
-  // Speak one sentence (or hold the caption for a word-count based time if speech is unavailable)
+  // Speak one sentence using pre-rendered WAV voice file (primary) with Web Speech API fallback
   speak(text, onEnd) {
-    this.cancelSpeech();
+    if (this.speechCancel) this.speechCancel();
     this.bubbleText = text;
     this.bubbleVisibleFor = 0;
     this.drawBubble(text);
@@ -202,35 +264,133 @@ export class DocentNPC {
 
     let finished = false;
     let timer = null;
+    let resumeTimer = null;
+    const audio = this.ensureVoiceAudio();
+
     const finish = () => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearInterval(resumeTimer);
+      this.activeUtterance = null;
       this.speechCancel = null;
       if (onEnd) onEnd();
     };
-    this.speechCancel = () => { finished = true; clearTimeout(timer); this.speechCancel = null; };
+
+    this.speechCancel = () => {
+      finished = true;
+      clearTimeout(timer);
+      clearInterval(resumeTimer);
+      this.activeUtterance = null;
+      this.speechCancel = null;
+      if (audio) {
+        try {
+          audio.onended = null;
+          audio.onerror = null;
+          audio.pause();
+        } catch (e) {}
+      }
+      if (this.synth && (this.synth.speaking || this.synth.pending)) {
+        try { this.synth.cancel(); } catch (e) {}
+      }
+    };
 
     const words = text.split(/\s+/).length;
-    const captionMs = words * 400 + 900;
-    if (this.synth) {
-      const u = new SpeechSynthesisUtterance(text);
-      if (this.voice) u.voice = this.voice;
-      u.lang = this.voice ? this.voice.lang : 'en-US';
-      u.rate = 1.0;
-      u.pitch = 1.05;
-      u.onend = finish;
-      u.onerror = finish;
-      timer = setTimeout(finish, Math.max(captionMs * 2, 5000)); // safety net if no end event arrives
-      this.synth.speak(u);
+    const captionMs = words * 380 + 900;
+
+    const speakWithSynth = () => {
+      if (finished) return;
+      if (!this.synth) {
+        timer = setTimeout(finish, captionMs);
+        return;
+      }
+      if (!this.voice) this.pickVoice();
+      const startUtterance = () => {
+        if (finished) return;
+        try {
+          if (this.synth.paused) this.synth.resume();
+          const u = new SpeechSynthesisUtterance(text);
+          this.activeUtterance = u; // Keep strong reference so Chromium V8 GC never drops it
+          if (this.voice) u.voice = this.voice;
+          u.lang = this.voice ? this.voice.lang : 'en-US';
+          u.rate = 1.0;
+          u.pitch = 1.05;
+          u.volume = 1.0;
+          const startedAt = performance.now();
+          u.onend = () => {
+            const elapsed = performance.now() - startedAt;
+            if (elapsed < 250 && words > 2) {
+              timer = setTimeout(finish, Math.max(400, captionMs - elapsed));
+            } else {
+              finish();
+            }
+          };
+          u.onerror = () => {
+            const elapsed = performance.now() - startedAt;
+            timer = setTimeout(finish, Math.max(400, captionMs - elapsed));
+          };
+          clearTimeout(timer);
+          timer = setTimeout(finish, Math.max(captionMs * 2.2, 6000));
+          resumeTimer = setInterval(() => {
+            if (this.synth && this.synth.paused) {
+              try { this.synth.resume(); } catch (e) {}
+            }
+          }, 4000);
+          this.synth.speak(u);
+        } catch (e) {
+          timer = setTimeout(finish, captionMs);
+        }
+      };
+
+      if (this.synth.speaking || this.synth.pending) {
+        try { this.synth.cancel(); } catch (e) {}
+        setTimeout(startUtterance, 65);
+      } else {
+        startUtterance();
+      }
+    };
+
+    // Primary: Play pre-rendered neural/SAPI WAV audio from media/docent/<hash>.wav
+    if (audio && this.synth !== null) {
+      const key = hashSpeechText(text);
+      audio.onended = finish;
+      audio.onerror = () => {
+        audio.onended = null;
+        audio.onerror = null;
+        speakWithSynth();
+      };
+      audio.src = `media/docent/${key}.wav`;
+      audio.currentTime = 0;
+      audio.volume = 1.0;
+      timer = setTimeout(finish, Math.max(captionMs * 2.5, 8000));
+      const p = audio.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          audio.onended = null;
+          audio.onerror = null;
+          speakWithSynth();
+        });
+      }
     } else {
-      timer = setTimeout(finish, captionMs);
+      speakWithSynth();
     }
   }
 
   cancelSpeech() {
-    if (this.speechCancel) this.speechCancel();
-    if (this.synth) this.synth.cancel();
+    if (this.speechCancel) {
+      this.speechCancel();
+    } else {
+      if (this.voiceAudio) {
+        try {
+          this.voiceAudio.onended = null;
+          this.voiceAudio.onerror = null;
+          this.voiceAudio.pause();
+        } catch (e) {}
+      }
+      if (this.synth && (this.synth.speaking || this.synth.pending)) {
+        try { this.synth.cancel(); } catch (e) {}
+      }
+    }
   }
 
   drawBubble(text) {
@@ -314,9 +474,11 @@ export class DocentNPC {
   explainNearest(playerPos) {
     this.stop(false, false);
     let key = null;
+    const distToAdventure = Math.hypot(playerPos.x - 9.0, playerPos.z - 14.5);
     const booth = this.booths ? this.booths.getNearbyBooth(playerPos, 9) : null;
     const cluster = this.relics ? this.relics.getNearbyCluster(playerPos, 4.5) : null;
-    if (booth && STOPS[`booth:${booth.def.id}`]) key = `booth:${booth.def.id}`;
+    if (distToAdventure < 6.0) key = 'adventure';
+    else if (booth && STOPS[`booth:${booth.def.id}`]) key = `booth:${booth.def.id}`;
     else if (cluster && STOPS[`relic:${cluster.id}`]) key = `relic:${cluster.id}`;
     else if (playerPos.z > 31 && playerPos.z < 46 && Math.abs(playerPos.x) < 9) key = 'helipad';
 
@@ -359,6 +521,7 @@ export class DocentNPC {
     const v = new THREE.Vector3();
     if (at === 'welcome') return v.set(-1.4, this.deckY, 19.8);
     if (at === 'helipad') return v.set(-6.8, this.deckY, 36.0);
+    if (at === 'adventure' || at === 'adventureCorridor') return v.set(7.2, this.deckY, 15.5);
     if (at.startsWith('booth:')) {
       const booth = this.booths.getBooth(at.split(':')[1]);
       v.set(2.3, 0, 1.2);
@@ -404,15 +567,25 @@ export class DocentNPC {
       step.waiting = false;
       if (this.booths) this.booths.stopAllNarration();
     } else if (step.type === 'demo') {
-      const [kind, id, cmd] = step.act.split(':');
-      step.kind = kind; step.id = id; step.cmd = cmd;
+      const parts = step.act.split(':');
+      const kind = parts[0];
+      step.kind = kind;
       step.fired = false;
       const target = new THREE.Vector3();
       if (kind === 'booth') {
+        const id = parts[1];
+        const cmd = parts[2];
+        step.id = id; step.cmd = cmd;
         const booth = this.booths.getBooth(id);
         step.booth = booth;
         this.booths.getButtonWorldPos(booth, cmd, target);
+      } else if (kind === 'adventure') {
+        step.act = step.act;
+        target.set(9.0, this.deckY + 1.1, 14.5);
       } else {
+        const id = parts[1];
+        const cmd = parts[2];
+        step.id = id; step.cmd = cmd;
         this.relics.getFocusPos(id, target);
       }
       step.target = target;
@@ -459,7 +632,9 @@ export class DocentNPC {
         if (!step.fired && step.t >= 0.9) {
           step.fired = true;
           if (step.kind === 'booth') this.booths.runCommand(step.booth, step.cmd);
-          else this.relics.runCommand(step.id, step.cmd);
+          else if (step.kind === 'adventure') {
+            if (this.adventureKiosk) this.adventureKiosk.handleAction(step.act);
+          } else this.relics.runCommand(step.id, step.cmd);
         }
         if (step.t >= 1.6) { this.pointTarget = null; return true; }
         return false;

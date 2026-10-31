@@ -4,8 +4,9 @@ import socket
 import os
 import sys
 import mimetypes
+import urllib.parse
 
-PORT = 8080
+PORT = int(os.environ.get("PORT", 8080))
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 # Fix Windows Registry bug where .js is incorrectly registered as text/plain
@@ -34,6 +35,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '.jpg': 'image/jpeg',
         '.mp4': 'video/mp4',
         '.webm': 'video/webm',
+        '.wav': 'audio/wav',
+        '.mp3': 'audio/mpeg',
     }
 
     def __init__(self, *args, **kwargs):
@@ -52,7 +55,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return 'text/css'
         if clean_path.endswith('.ico'):
             return 'image/x-icon'
-        return super().guess_type(path)
+        return super().guess_type(clean_path)
 
     def end_headers(self):
         # Enable CORS, WebXR, and video streaming headers
@@ -60,7 +63,73 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-ID, X-Payment-Token')
+        self.send_header('Access-Control-Expose-Headers', 'WWW-Authenticate, Payment-Required, X-Payment-Token')
         super().end_headers()
+
+    def _is_api_request(self):
+        clean = self.path.split('?')[0].split('#')[0]
+        return clean.startswith('/api/') or clean == '/api'
+
+    def _is_dotfile_path(self):
+        raw_clean = self.path.split('?')[0].split('#')[0]
+        unquoted = urllib.parse.unquote(raw_clean)
+        for target in (raw_clean, unquoted):
+            if '\\' in target or '..' in target:
+                return True
+            parts = target.replace('\\', '/').split('/')
+            for part in parts:
+                if part.startswith('.') and part != '':
+                    return True
+        return False
+
+    def do_OPTIONS(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        else:
+            self.send_response(204)
+            self.end_headers()
+
+    def do_GET(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        elif self._is_dotfile_path():
+            self.send_error(404, "File not found")
+        else:
+            super().do_GET()
+
+    def do_HEAD(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        elif self._is_dotfile_path():
+            self.send_error(404, "File not found")
+        else:
+            super().do_HEAD()
+
+    def do_POST(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        else:
+            self.send_error(405, "Method Not Allowed")
+
+    def do_PUT(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        else:
+            self.send_error(405, "Method Not Allowed")
+
+    def do_DELETE(self):
+        if self._is_api_request():
+            import backend.api_handler
+            backend.api_handler.handle_request(self)
+        else:
+            self.send_error(405, "Method Not Allowed")
 
 def get_local_ip():
     try:

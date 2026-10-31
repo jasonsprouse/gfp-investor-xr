@@ -32,9 +32,15 @@ export class XRControllerManager {
     this.handheldRemote = null;
     this.lastRemoteTitle = '';
     this.lastRemotePlaying = null;
+    this.lastNearbyLabel = '';
+
+    // Floating 3D VR Quick-Teleport & Booth Menu
+    this.floatingMenu = null;
+    this.floatingMenuVisible = false;
 
     this.buildTeleportMarker();
     this.setupControllers();
+    this.buildFloatingVRMenu();
   }
 
   buildTeleportMarker() {
@@ -85,15 +91,64 @@ export class XRControllerManager {
     return group;
   }
 
-  // Handheld Cyber Media Remote Mounted on the Controller Grip
+  // Helper to create a labeled 3D button for Wrist Remote or Floating VR Menu
+  createMenu3DButton(label, action, colorHex, w, h, d) {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x0d1324,
+      emissive: colorHex,
+      emissiveIntensity: 0.45,
+      metalness: 0.8,
+      roughness: 0.25
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.name = `vrmenu_${action}`;
+    mesh.userData = { action };
+    group.add(mesh);
+    this.interactableObjects.push(mesh);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    const hex = '#' + colorHex.toString(16).padStart(6, '0');
+    ctx.fillStyle = '#070b16';
+    ctx.fillRect(0, 0, 256, 96);
+    ctx.strokeStyle = hex;
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, 250, 90);
+    ctx.fillStyle = '#ffffff';
+    const fontSize = label.length > 14 ? 22 : (label.length > 9 ? 26 : 30);
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, 128, 48);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const face = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.95, h * 0.92),
+      new THREE.MeshBasicMaterial({ map: tex })
+    );
+    face.position.z = d / 2 + 0.001;
+    face.userData = { action };
+    group.add(face);
+    this.interactableObjects.push(face);
+
+    return group;
+  }
+
+  // Upgraded Multi-Deck Handheld Cyber Remote Mounted on the Left Controller Grip
   buildHandheldRemote(grip) {
     const remoteGroup = new THREE.Group();
-    // Positioned right above the controller grip angled towards player's eyes
-    remoteGroup.position.set(0, 0.065, -0.02);
-    remoteGroup.rotation.x = -Math.PI / 5;
+    // Positioned above the controller grip angled towards player's eyes
+    remoteGroup.position.set(0, 0.085, -0.03);
+    remoteGroup.rotation.x = -Math.PI / 4.5;
 
-    // 1. Futuristic Bezel Body
-    const bodyGeo = new THREE.BoxGeometry(0.18, 0.11, 0.016);
+    // 1. Futuristic Bezel Body (expanded for 3 rows: Booth Controls, Quick Teleport, Media + Menu)
+    const bodyW = 0.23;
+    const bodyH = 0.175;
+    const bodyGeo = new THREE.BoxGeometry(bodyW, bodyH, 0.014);
     const bodyMat = new THREE.MeshStandardMaterial({
       color: 0x090c16,
       metalness: 0.9,
@@ -103,7 +158,7 @@ export class XRControllerManager {
     remoteGroup.add(body);
 
     // Cyber Edge Neon Trim
-    const trimGeo = new THREE.BoxGeometry(0.186, 0.116, 0.012);
+    const trimGeo = new THREE.BoxGeometry(bodyW + 0.006, bodyH + 0.006, 0.011);
     const trimMat = new THREE.MeshBasicMaterial({
       color: 0x00f0ff,
       wireframe: true
@@ -111,43 +166,67 @@ export class XRControllerManager {
     const trim = new THREE.Mesh(trimGeo, trimMat);
     remoteGroup.add(trim);
 
-    // 2. Canvas Display for Track Title & Live Playback Status
+    // 2. Canvas Display for Track Title, Active Booth, & Live Status
     this.remoteCanvas = document.createElement('canvas');
     this.remoteCanvas.width = 512;
-    this.remoteCanvas.height = 256;
+    this.remoteCanvas.height = 192;
     this.remoteCtx = this.remoteCanvas.getContext('2d');
     this.remoteTexture = new THREE.CanvasTexture(this.remoteCanvas);
 
-    const screenGeo = new THREE.PlaneGeometry(0.165, 0.06);
+    const screenGeo = new THREE.PlaneGeometry(0.21, 0.055);
     const screenMat = new THREE.MeshBasicMaterial({
       map: this.remoteTexture,
       transparent: true
     });
     const screenMesh = new THREE.Mesh(screenGeo, screenMat);
-    screenMesh.position.set(0, 0.02, 0.01);
+    screenMesh.position.set(0, 0.052, 0.009);
     remoteGroup.add(screenMesh);
 
-    // 3. Tactile 3D Buttons on Handheld Remote
-    const remoteButtons = [
-      { id: 'prev', label: 'PREV', color: 0x00f0ff, x: -0.055 },
-      { id: 'play', label: 'PLAY', color: 0xff007f, x: 0 },
-      { id: 'next', label: 'NEXT', color: 0x00f0ff, x: 0.055 }
+    // 3. Three Rows of Tactile 3D Buttons on Wrist Remote:
+    // Row 1 (y = +0.008): Nearest Booth & Docent Controls
+    // Row 2 (y = -0.026): Quick-Jump Teleport (Booths, Corridor, Relics, Club)
+    // Row 3 (y = -0.060): Media Controls & Floating 3D Menu Toggle
+    const rows = [
+      {
+        y: 0.008,
+        buttons: [
+          { action: 'vr:booth_prev', label: '◄ SLIDE', color: 0x00f0ff },
+          { action: 'vr:booth_narrate', label: 'NARRATE', color: 0x00ff88 },
+          { action: 'vr:booth_next', label: 'SLIDE ►', color: 0x00f0ff },
+          { action: 'vr:docent_explain', label: 'DOCENT', color: 0xffc400 }
+        ]
+      },
+      {
+        y: -0.026,
+        buttons: [
+          { action: 'vr:cycle_booth', label: 'BOOTHS', color: 0xb26bff },
+          { action: 'teleport:adventure', label: 'CORRIDOR', color: 0x00f0ff },
+          { action: 'teleport:relics', label: 'RELICS', color: 0xffc400 },
+          { action: 'teleport:floor', label: 'CLUB', color: 0xff007f }
+        ]
+      },
+      {
+        y: -0.060,
+        buttons: [
+          { action: 'prev', label: '◄ TRK', color: 0x00f0ff },
+          { action: 'play', label: 'PLAY', color: 0xff007f },
+          { action: 'next', label: 'TRK ►', color: 0x00f0ff },
+          { action: 'vr:toggle_menu', label: '☰ MENU', color: 0xffaa00 }
+        ]
+      }
     ];
 
-    remoteButtons.forEach((b) => {
-      const bGeo = new THREE.BoxGeometry(0.046, 0.024, 0.014);
-      const bMat = new THREE.MeshStandardMaterial({
-        color: b.color,
-        emissive: b.color,
-        emissiveIntensity: 0.85,
-        roughness: 0.2
+    const btnW = 0.048;
+    const btnH = 0.026;
+    const btnD = 0.012;
+    const xs = [-0.078, -0.026, 0.026, 0.078];
+
+    rows.forEach((row) => {
+      row.buttons.forEach((b, idx) => {
+        const btn = this.createMenu3DButton(b.label, b.action, b.color, btnW, btnH, btnD);
+        btn.position.set(xs[idx], row.y, 0.010);
+        remoteGroup.add(btn);
       });
-      const bMesh = new THREE.Mesh(bGeo, bMat);
-      bMesh.position.set(b.x, -0.024, 0.012);
-      bMesh.name = `remote_${b.id}`;
-      bMesh.userData = { action: b.id };
-      remoteGroup.add(bMesh);
-      this.interactableObjects.push(bMesh);
     });
 
     grip.add(remoteGroup);
@@ -155,7 +234,148 @@ export class XRControllerManager {
     this.renderHandheldRemote('Sanctuary of Sound', true);
   }
 
-  renderHandheldRemote(videoTitle, isPlaying, playerState = 'WALKING') {
+  // Floating 3D VR Campus & Booth Command Menu (toggled in front of player via Wrist ☰ MENU, Left Stick Click, or [M])
+  buildFloatingVRMenu() {
+    const menuGroup = new THREE.Group();
+    menuGroup.visible = false;
+    this.floatingMenu = menuGroup;
+    this.scene.add(menuGroup);
+
+    const panelW = 1.55;
+    const panelH = 1.05;
+
+    // Backing cyber glass panel
+    const bgMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(panelW, panelH, 0.025),
+      new THREE.MeshStandardMaterial({
+        color: 0x060a16,
+        metalness: 0.85,
+        roughness: 0.25,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+    menuGroup.add(bgMesh);
+
+    const borderMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(panelW + 0.02, panelH + 0.02, 0.018),
+      new THREE.MeshBasicMaterial({ color: 0x00f0ff, wireframe: true })
+    );
+    menuGroup.add(borderMesh);
+
+    // Header Banner
+    const hCanvas = document.createElement('canvas');
+    hCanvas.width = 1024;
+    hCanvas.height = 128;
+    const hCtx = hCanvas.getContext('2d');
+    hCtx.fillStyle = '#070d1e';
+    hCtx.fillRect(0, 0, 1024, 128);
+    hCtx.strokeStyle = '#00f0ff';
+    hCtx.lineWidth = 4;
+    hCtx.strokeRect(4, 4, 1016, 120);
+    hCtx.fillStyle = '#00f0ff';
+    hCtx.font = 'bold 34px monospace';
+    hCtx.textAlign = 'center';
+    hCtx.fillText('VR CAMPUS TELEPORT & BOOTH COMMAND DECK', 512, 52);
+    hCtx.fillStyle = '#9fb3d9';
+    hCtx.font = '22px sans-serif';
+    hCtx.fillText('Point Laser / Crosshair & Click Any Button • Press [M] or ✕ to Close', 512, 96);
+
+    const hTex = new THREE.CanvasTexture(hCanvas);
+    hTex.colorSpace = THREE.SRGBColorSpace;
+    const headerMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(panelW - 0.08, 0.14),
+      new THREE.MeshBasicMaterial({ map: hTex })
+    );
+    headerMesh.position.set(0, panelH / 2 - 0.10, 0.015);
+    menuGroup.add(headerMesh);
+
+    // Grid of 4 columns x 5 rows of 3D interactive buttons
+    const buttonRows = [
+      // Row 1: Pitch Booths (Direct Teleport)
+      [
+        { label: '1: PRISMATIC BOOTH', action: 'teleport:booth:prismatic', color: 0x00f0ff },
+        { label: '2: HARPS OF GOD', action: 'teleport:booth:harps', color: 0xffc400 },
+        { label: '3: SACRED ARCHIVE', action: 'teleport:booth:archive', color: 0xff007f },
+        { label: '4: COLLECTOR NFT', action: 'teleport:booth:collector', color: 0x00ff88 }
+      ],
+      // Row 2: Skyport Exhibits & Docent Teleport
+      [
+        { label: 'ADVENTURE CORRIDOR', action: 'teleport:adventure', color: 0x00f0ff },
+        { label: 'RELIC PAVILION', action: 'teleport:relics', color: 0xb26bff },
+        { label: 'DOCENT LUX KIOSK', action: 'teleport:docent', color: 0xffc400 },
+        { label: 'SKYPORT OVERVIEW', action: 'teleport:skyport', color: 0x00f0ff }
+      ],
+      // Row 3: Nearest Booth / Exhibit Remote Controls
+      [
+        { label: '◄ PREV SLIDE', action: 'vr:booth_prev', color: 0x00f0ff },
+        { label: 'PLAY / NARRATE', action: 'vr:booth_narrate', color: 0x00ff88 },
+        { label: 'NEXT SLIDE ►', action: 'vr:booth_next', color: 0x00f0ff },
+        { label: 'SWITCH BOOTH VIEW', action: 'vr:booth_view', color: 0xb26bff }
+      ],
+      // Row 4: Docent Lux Voice & Guided Tour Controls
+      [
+        { label: 'DOCENT: FULL TOUR', action: 'docent:tour', color: 0xffc400 },
+        { label: 'DOCENT: EXPLAIN HERE', action: 'vr:docent_explain', color: 0x00f0ff },
+        { label: 'DOCENT: RELICS TOUR', action: 'docent:relics', color: 0xb26bff },
+        { label: 'DOCENT: STOP', action: 'docent:stop', color: 0xff3b6b }
+      ],
+      // Row 5: Vehicles, Paradigm Club & Close Menu
+      [
+        { label: '✈ BOARD eVTOL', action: 'teleport:vtol', color: 0xffaa00 },
+        { label: '🚗 GROUND ROVER', action: 'teleport:rover', color: 0x00f0ff },
+        { label: 'PARADIGM CLUB FLOOR', action: 'teleport:floor', color: 0xff007f },
+        { label: '✕ CLOSE MENU', action: 'vr:toggle_menu', color: 0xff3b6b }
+      ]
+    ];
+
+    const colX = [-0.54, -0.18, 0.18, 0.54];
+    const rowY = [0.26, 0.10, -0.06, -0.22, -0.38];
+    const bW = 0.33;
+    const bH = 0.115;
+    const bD = 0.022;
+
+    buttonRows.forEach((row, rIdx) => {
+      row.forEach((b, cIdx) => {
+        const btn = this.createMenu3DButton(b.label, b.action, b.color, bW, bH, bD);
+        btn.position.set(colX[cIdx], rowY[rIdx], 0.018);
+        menuGroup.add(btn);
+      });
+    });
+
+    menuGroup.traverse((child) => {
+      child.visible = false;
+    });
+  }
+
+  toggleFloatingMenu(forceState) {
+    if (!this.floatingMenu) return false;
+    this.floatingMenuVisible = typeof forceState === 'boolean' ? forceState : !this.floatingMenuVisible;
+    this.floatingMenu.traverse((child) => {
+      child.visible = this.floatingMenuVisible;
+    });
+    if (this.floatingMenuVisible) {
+      this.positionFloatingMenuInFront();
+    }
+    return this.floatingMenuVisible;
+  }
+
+  positionFloatingMenuInFront() {
+    if (!this.floatingMenu) return;
+    const camPos = new THREE.Vector3();
+    const camDir = new THREE.Vector3();
+    this.camera.getWorldPosition(camPos);
+    this.camera.getWorldDirection(camDir);
+    camDir.y = 0;
+    if (camDir.lengthSq() < 0.001) camDir.set(0, 0, -1);
+    camDir.normalize();
+
+    this.floatingMenu.position.copy(camPos).addScaledVector(camDir, 1.55);
+    this.floatingMenu.position.y = Math.max(this.dolly.position.y + 1.35, camPos.y - 0.1);
+    this.floatingMenu.lookAt(camPos.x, this.floatingMenu.position.y, camPos.z);
+  }
+
+  renderHandheldRemote(videoTitle, isPlaying, playerState = 'WALKING', nearbyLabel = '') {
     if (!this.remoteCtx) return;
     const ctx = this.remoteCtx;
     const w = this.remoteCanvas.width;
@@ -175,25 +395,25 @@ export class XRControllerManager {
     ctx.fillStyle = '#00f0ff';
     ctx.shadowColor = '#00f0ff';
     ctx.shadowBlur = 8;
-    const stateTag = playerState === 'VTOL_PILOT' ? '✈ eVTOL COCKPIT' : (playerState === 'LAST_MILE_DRIVER' ? '🚗 ROVER COCKPIT' : '★ INVESTOR XR CAMPUS');
-    ctx.fillText(stateTag, w / 2, 34);
+    const stateTag = playerState === 'VTOL_PILOT' ? '✈ eVTOL COCKPIT' : (playerState === 'LAST_MILE_DRIVER' ? '🚗 ROVER COCKPIT' : '★ WRIST COMMAND DECK');
+    ctx.fillText(stateTag, w / 2, 32);
 
-    // Track Title
-    ctx.font = 'bold 26px Arial, sans-serif';
+    // Active Booth / Nearby Exhibit or Track Title
+    ctx.font = 'bold 24px Arial, sans-serif';
     ctx.fillStyle = '#ffffff';
     ctx.shadowBlur = 0;
-    const title = videoTitle ? (videoTitle.length > 24 ? videoTitle.substring(0, 22) + '...' : videoTitle) : 'TimeLapse';
-    ctx.fillText(title, w / 2, 85);
+    const primaryText = nearbyLabel || (videoTitle ? (videoTitle.length > 26 ? videoTitle.substring(0, 24) + '...' : videoTitle) : 'Skyport Deck');
+    ctx.fillText(primaryText, w / 2, 74);
 
     // Live Status
-    ctx.font = 'bold 20px Arial, sans-serif';
+    ctx.font = 'bold 18px Arial, sans-serif';
     ctx.fillStyle = isPlaying ? '#00ff88' : '#ffaa00';
-    ctx.fillText(isPlaying ? '● SCREEN PLAYING' : '❚❚ SCREEN PAUSED', w / 2, 126);
+    ctx.fillText(isPlaying ? '● CINEMA PLAYING  •  [☰ MENU] FOR ALL BOOTHS' : '❚❚ CINEMA PAUSED  •  [☰ MENU] FOR ALL BOOTHS', w / 2, 114);
 
     // Button legend
-    ctx.font = '16px Arial, sans-serif';
-    ctx.fillStyle = '#7a859e';
-    ctx.fillText(playerState === 'WALKING' ? 'Press [A / X] to Toggle Play' : 'Press [A / X] to Exit Vehicle', w / 2, 175);
+    ctx.font = '15px monospace';
+    ctx.fillStyle = '#8fa4c8';
+    ctx.fillText('ROW 1: BOOTH/DOCENT • ROW 2: TELEPORT • ROW 3: MEDIA/MENU', w / 2, 158);
 
     this.remoteTexture.needsUpdate = true;
   }
@@ -380,10 +600,14 @@ export class XRControllerManager {
           if (this.onInteract) this.onInteract('next');
         }
 
-        // Button 3: Thumbstick Click -> Prev Video
+        // Button 3: Left Thumbstick Click -> Toggle Floating 3D VR Menu; Right Thumbstick Click -> Prev Video
         if (isDown(3) && !prev[3]) {
           this.triggerHaptic(source.handedness === 'left' ? 1 : 0, 0.8, 100);
-          if (this.onInteract) this.onInteract('prev');
+          if (source.handedness === 'left') {
+            if (this.onInteract) this.onInteract('vr:toggle_menu');
+          } else {
+            if (this.onInteract) this.onInteract('prev');
+          }
         }
 
         // Save states for edge triggering

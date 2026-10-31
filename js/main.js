@@ -10,6 +10,12 @@ import { MobilityManager } from './mobilityManager.js';
 import { BoothManager } from './boothManager.js';
 import { RelicPavilion } from './relicPavilion.js';
 import { DocentNPC } from './docentNPC.js';
+import { WishingWellManager } from './wishingWellManager.js';
+import { web3Payment } from './web3Payment.js';
+import { NFTBasket } from './nftBasket.js';
+import { WishingWell } from './wishingWell.js';
+import { SubscriptionUI } from './subscriptionUI.js';
+import { AdventureKiosk } from './adventureKiosk.js';
 
 class App {
   constructor() {
@@ -90,13 +96,32 @@ class App {
     this.relicPavilion = new RelicPavilion(this.scene, {
       renderer: this.renderer,
       onOpenLink: (url) => this.openBoothLink(url),
-      onNotify: (msg) => this.showHUDNotification(msg)
+      onNotify: (msg) => this.showHUDNotification(msg),
+      onWishMedallion: (metal) => {
+        if (this.controls && this.controls.isLocked) this.controls.unlock();
+        if (this.wishingWell) this.wishingWell.purchaseMedallionCredits(metal);
+      },
+      onAddCardToCart: (token) => {
+        if (this.controls && this.controls.isLocked) this.controls.unlock();
+        if (this.nftBasket) this.nftBasket.addItem(token, 1);
+      }
     });
     this.relicPavilion.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
+
+    this.adventureKiosk = new AdventureKiosk(this.scene, {
+      position: [9.0, 30.0, 14.5],
+      rotY: -Math.PI / 10,
+      onOpenLink: (url) => this.openBoothLink(url),
+      onNotify: (msg) => this.showHUDNotification(msg),
+      onNarrationChange: (active) => this.setVoiceSource('adventure', active)
+    });
+    this.adventureKiosk.interactableObjects.forEach(obj => this.clubScene.interactableObjects.push(obj));
+    this.clubScene.setAdventureKiosk(this.adventureKiosk);
 
     this.docent = new DocentNPC(this.scene, this.npcManager, {
       boothManager: this.boothManager,
       relicPavilion: this.relicPavilion,
+      adventureKiosk: this.adventureKiosk,
       onVoiceChange: (active) => this.setVoiceSource('docent', active),
       onNotify: (msg) => this.showHUDNotification(msg)
     });
@@ -143,6 +168,7 @@ class App {
 
     // Click canvas to lock pointer
     this.container.addEventListener('click', () => {
+      if (this.docent) this.docent.unlockVoice();
       if (!this.renderer.xr.isPresenting && !this.controls.isLocked) {
         this.controls.lock();
       } else if (this.controls.isLocked) {
@@ -189,12 +215,19 @@ class App {
           break;
         case 'KeyT':
           if (this.playerState === 'WALKING' && this.docent) {
+            this.docent.unlockVoice();
             if (this.docent.touring) this.docent.stop(true);
             else this.docent.startTour();
           }
           break;
         case 'KeyH':
-          if (this.playerState === 'WALKING' && this.docent) this.docent.explainNearest(this.dolly.position);
+          if (this.playerState === 'WALKING' && this.docent) {
+            this.docent.unlockVoice();
+            this.docent.explainNearest(this.dolly.position);
+          }
+          break;
+        case 'KeyM':
+          this.handleAction('vr:toggle_menu');
           break;
         case 'Space':
           if (this.playerState === 'VTOL_PILOT') {
@@ -263,6 +296,58 @@ class App {
   }
 
   handleAction(action) {
+    if (this.docent) this.docent.unlockVoice();
+
+    if (typeof action === 'string' && action.startsWith('teleport:')) {
+      const targetView = action.slice('teleport:'.length);
+      this.teleportToPreset(targetView);
+      if (this.xrController && this.xrController.floatingMenuVisible) {
+        this.xrController.toggleFloatingMenu(false);
+      }
+      return;
+    }
+    if (typeof action === 'string' && action.startsWith('vr:')) {
+      const vrCmd = action.slice('vr:'.length);
+      if (vrCmd === 'toggle_menu') {
+        if (this.xrController) {
+          const open = this.xrController.toggleFloatingMenu();
+          this.showHUDNotification(open ? '☰ 3D VR COMMAND MENU OPENED — CLICK ANY BUTTON' : '3D VR COMMAND MENU CLOSED');
+        }
+        return;
+      }
+      if (vrCmd === 'cycle_booth') {
+        const boothIds = ['booth:prismatic', 'booth:harps', 'booth:archive', 'booth:collector'];
+        this._vrBoothCycleIdx = ((this._vrBoothCycleIdx || 0) + 1) % boothIds.length;
+        const target = boothIds[this._vrBoothCycleIdx];
+        this.teleportToPreset(target);
+        return;
+      }
+      if (vrCmd === 'docent_explain') {
+        if (this.docent) this.docent.explainNearest(this.dolly.position);
+        return;
+      }
+      if (vrCmd === 'booth_prev' || vrCmd === 'booth_next' || vrCmd === 'booth_narrate' || vrCmd === 'booth_view') {
+        const advDist = this.adventureKiosk ? Math.hypot(this.dolly.position.x - 9.0, this.dolly.position.z - 14.5) : 999;
+        const nearBooth = this.boothManager ? this.boothManager.getNearbyBooth(this.dolly.position, 40) : null;
+        const boothDist = nearBooth ? this.dolly.position.distanceTo(nearBooth.worldPos) : 999;
+        if (this.adventureKiosk && advDist < 6.5 && advDist < boothDist) {
+          if (vrCmd === 'booth_prev') this.adventureKiosk.prev();
+          else if (vrCmd === 'booth_next') this.adventureKiosk.next();
+          else if (vrCmd === 'booth_narrate') this.adventureKiosk.toggleAudio();
+          else if (vrCmd === 'booth_view') this.adventureKiosk.toggleAutoplay();
+        } else if (nearBooth && this.boothManager) {
+          const mapCmd = { booth_prev: 'prev', booth_next: 'next', booth_narrate: 'toggle', booth_view: 'view' }[vrCmd];
+          this.boothManager.runCommand(nearBooth, mapCmd);
+        } else {
+          this.showHUDNotification('Move to the Skyport Deck or teleport to a Booth first');
+        }
+        return;
+      }
+    }
+    if (typeof action === 'string' && (action.startsWith('adventure:') || action.startsWith('adventure_'))) {
+      if (this.adventureKiosk) this.adventureKiosk.handleAction(action, this.dolly.position);
+      return;
+    }
     if (typeof action === 'string' && action.startsWith('relic:')) {
       if (this.relicPavilion) this.relicPavilion.handleAction(action, this.dolly.position);
       return;
@@ -480,6 +565,7 @@ class App {
     // Start / Dismiss modal
     startBtn?.addEventListener('click', () => {
       modal?.classList.add('hidden');
+      if (this.docent) this.docent.unlockVoice();
       this.selectTrack(0);
       this.controls.lock();
       setTimeout(() => this.docent && this.docent.greet(), 1800);
@@ -513,10 +599,33 @@ class App {
     // View Presets
     document.querySelectorAll('.btn-preset').forEach((btn) => {
       btn?.addEventListener('click', (e) => {
-        const view = e.target.getAttribute('data-view');
-        this.teleportToPreset(view);
+        const view = e.currentTarget.getAttribute('data-view');
+        if (view === 'vrmenu') {
+          this.handleAction('vr:toggle_menu');
+        } else {
+          this.teleportToPreset(view);
+        }
       });
     });
+
+    // Initialize Web3 Monetization Layer (HTTP 402, Rarible NFT Basket, Wishing Well, Subscriptions)
+    this.web3Payment = web3Payment;
+    this.nftBasket = new NFTBasket({
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    this.wishingWell = new WishingWell({
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    this.subscriptionUI = new SubscriptionUI({
+      onNotify: (msg) => this.showHUDNotification(msg)
+    });
+    window.gfp = {
+      web3Payment: this.web3Payment,
+      nftBasket: this.nftBasket,
+      wishingWell: this.wishingWell,
+      subscriptionUI: this.subscriptionUI,
+      adventureKiosk: this.adventureKiosk
+    };
   }
 
   teleportToPreset(view) {
@@ -528,14 +637,18 @@ class App {
       const booth = this.boothManager.getBooth(view.split(':')[1]);
       if (booth) {
         const stand = this.boothManager.getStandPoint(booth);
-        this.dolly.position.set(stand.x, this.dolly.position.y, stand.z);
+        this.dolly.position.set(stand.x, 30.0, stand.z);
         const look = booth.group.localToWorld(new THREE.Vector3(0, 2.1, -1.9));
         this.camera.lookAt(look);
+        this.showHUDNotification(`Teleported to ${booth.def.title}`);
       }
       return;
     }
 
-    if (view === 'skyport') {
+    if (view === 'adventure') {
+      this.dolly.position.set(7.5, 30.0, 18.0);
+      this.camera.lookAt(9.0, 31.8, 14.2);
+    } else if (view === 'skyport') {
       this.dolly.position.set(0, 30.0, 22);
       this.camera.lookAt(0, 34.0, 12);
     } else if (view === 'relics') {
@@ -646,9 +759,9 @@ class App {
       // Vertiport Bravo, Promenade & Entertainment Venues
       this.dolly.position.x = Math.max(-32, Math.min(32, this.dolly.position.x));
       this.dolly.position.z = Math.max(-152, Math.min(26, this.dolly.position.z));
-      if (this.dolly.position.z < 22 && this.dolly.position.z >= -135) {
+      if (this.dolly.position.z < -23.0 && this.dolly.position.z >= -152.0) {
         this.dolly.position.y = 5.0;
-      } else if (this.dolly.position.z >= 22) {
+      } else {
         this.dolly.position.y = 0.0;
       }
     }
@@ -674,6 +787,9 @@ class App {
       }
       if (this.boothManager) {
         this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
+      }
+      if (this.adventureKiosk) {
+        this.adventureKiosk.update(delta, t);
       }
       if (this.vtolManager) {
         const vtolThrust = (this.moveForward || this.isAscending);
@@ -785,6 +901,9 @@ class App {
         } else if (cluster) {
           hud.style.display = 'block';
           hud.innerHTML = `<span class="badge-icon">\u2728</span> <strong>${cluster.title}</strong> &bull; <span class="badge-action">${cluster.hint.toUpperCase()} &nbsp;[H] DOCENT EXPLAINS</span>`;
+        } else if (this.adventureKiosk && Math.hypot(this.dolly.position.x - 9.0, this.dolly.position.z - 14.5) < 5.0) {
+          hud.style.display = 'block';
+          hud.innerHTML = `<span class="badge-icon">\u{1F310}</span> <strong>ADVENTURE CORRIDOR</strong> &bull; <span class="badge-action">CLICK PEDESTAL BUTTONS &nbsp;[H] DOCENT EXPLAINS</span>`;
         } else if (this.docent && this.docent.isNearKiosk(this.dolly.position)) {
           hud.style.display = 'block';
           hud.innerHTML = `<span class="badge-icon">\u{1F9ED}</span> <strong>DOCENT LUX</strong> &bull; <span class="badge-action">[T] TOUR &nbsp;[H] EXPLAIN NEAREST &nbsp;OR USE THE KIOSK</span>`;
@@ -867,6 +986,7 @@ window.addEventListener('DOMContentLoaded', () => {
             app.relicPavilion.update(0.1, s);
             app.docent.update(0.1, s, app.dolly.position);
             app.boothManager.update(0.1, s, app.dolly.position, app.audioManager);
+            if (app.adventureKiosk) app.adventureKiosk.update(0.1, s);
           }
         } else {
           app.handleAction(act);

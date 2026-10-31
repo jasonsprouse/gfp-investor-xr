@@ -52,6 +52,7 @@ export class ClubScene {
     this.lasersEnabled = true;
     this.strobesEnabled = false;
     this.visualizerMode = 0; // 0: Spectrum, 1: Tunnel, 2: Sacred Waves
+    this.adventureKiosk = null;
     
     this.buildArchitecture();
     this.buildDanceFloor();
@@ -116,30 +117,11 @@ export class ClubScene {
     backWall.position.set(0, roomH / 2, -roomL / 2);
     this.scene.add(backWall);
 
-    // Front Wall with Grand Entrance Archway connecting to Entertainment Promenade
-    const wallSecW = (roomW - 10) / 2; // 12m each side, 10m center opening
-    const leftFrontWall = new THREE.Mesh(new THREE.PlaneGeometry(wallSecW, roomH), wallMat);
-    leftFrontWall.position.set(-roomW / 2 + wallSecW / 2, roomH / 2, roomL / 2);
-    leftFrontWall.rotation.y = Math.PI;
-    this.scene.add(leftFrontWall);
-
-    const rightFrontWall = new THREE.Mesh(new THREE.PlaneGeometry(wallSecW, roomH), wallMat);
-    rightFrontWall.position.set(roomW / 2 - wallSecW / 2, roomH / 2, roomL / 2);
-    rightFrontWall.rotation.y = Math.PI;
-    this.scene.add(rightFrontWall);
-
-    const lintel = new THREE.Mesh(new THREE.PlaneGeometry(10, roomH - 5.5), wallMat);
-    lintel.position.set(0, 5.5 + (roomH - 5.5) / 2, roomL / 2);
-    lintel.rotation.y = Math.PI;
-    this.scene.add(lintel);
-
-    // Glowing Cyan Portal Frame
-    const portalArch = new THREE.Mesh(
-      new THREE.BoxGeometry(10.4, 0.3, 0.4),
-      new THREE.MeshBasicMaterial({ color: 0x00f0ff })
-    );
-    portalArch.position.set(0, 5.5, roomL / 2);
-    this.scene.add(portalArch);
+    // Front Wall
+    const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(roomW, roomH), wallMat);
+    frontWall.position.set(0, roomH / 2, roomL / 2);
+    frontWall.rotation.y = Math.PI;
+    this.scene.add(frontWall);
 
     // Left Wall
     const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(roomL, roomH), wallMat);
@@ -786,6 +768,17 @@ export class ClubScene {
     this.scene.add(this.fogParticles);
   }
 
+  setAdventureKiosk(kiosk) {
+    this.adventureKiosk = kiosk;
+    if (kiosk && kiosk.interactableObjects) {
+      kiosk.interactableObjects.forEach((obj) => {
+        if (!this.interactableObjects.includes(obj)) {
+          this.interactableObjects.push(obj);
+        }
+      });
+    }
+  }
+
   // --- Animation & Dynamic Audio-Reactivity Update ---
   update(delta, time, audioManager) {
     const bass = audioManager ? audioManager.getBass() : 0;
@@ -896,6 +889,11 @@ export class ClubScene {
     // 10. Render Canvas Visualizer if active
     if (this.screenMat && this.screenMat.map === this.screenTexture) {
       this.renderBigScreen(time, audioManager);
+    }
+
+    // 11. Update Adventure Corridor Kiosk if attached
+    if (this.adventureKiosk) {
+      this.adventureKiosk.update(delta, time);
     }
   }
 
@@ -1098,6 +1096,11 @@ export class ClubScene {
       light.position.set(lx, deckY + 5.5, lz);
       this.scene.add(light);
     });
+
+    // Dedicated Adventure Corridor Cyber Accent Light (x: 9.0, z: 14.5)
+    const adventureAccentLight = new THREE.PointLight(0x00f0ff, 1.2, 12, 1.6);
+    adventureAccentLight.position.set(9.0, deckY + 3.2, 14.5);
+    this.scene.add(adventureAccentLight);
 
     const glassBalustradeMat = new THREE.MeshPhysicalMaterial({
       color: 0x00f0ff,
@@ -1505,11 +1508,11 @@ export class ClubScene {
     this.scene.add(coil);
   }
 
-  // --- Entertainment Promenade & Boulevard (Connecting Vertiport to Club) ---
+  // --- Entertainment Promenade & Boulevard (Connecting Vertiport to Exterior Plaza outside Club) ---
   buildPromenade() {
     const roadW = 12.0;
     const startZ = -135.0;
-    const endZ = 22.0;
+    const endZ = -25.0;
     const roadL = endZ - startZ;
     const centerZ = (startZ + endZ) / 2;
 
@@ -1582,8 +1585,8 @@ export class ClubScene {
       });
     }
 
-    // 4. Overhead Illuminated Sign Archways across Boulevard
-    const archPositions = [startZ + 40, (startZ + endZ) / 2, endZ - 20];
+    // 4. Overhead Illuminated Sign Archways across Boulevard (strictly outside the club)
+    const archPositions = [startZ + 30, (startZ + endZ) / 2, endZ - 6];
     archPositions.forEach((az, idx) => {
       const archGroup = new THREE.Group();
       archGroup.position.set(0, 5.0, az);

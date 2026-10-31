@@ -15,10 +15,12 @@ const MILES_PER_SEC = 555.56; // 2,000,000 mph
  *   medals  - 2 oz Gold / Silver / Copper raffle medallions (flip)
  */
 export class RelicPavilion {
-  constructor(scene, { renderer, position = [0, 30, 28.5], onOpenLink, onNotify } = {}) {
+  constructor(scene, { renderer, position = [0, 30, 28.5], onOpenLink, onNotify, onWishMedallion, onAddCardToCart } = {}) {
     this.scene = scene;
     this.onOpenLink = onOpenLink || (() => {});
     this.onNotify = onNotify || (() => {});
+    this.onWishMedallion = onWishMedallion || null;
+    this.onAddCardToCart = onAddCardToCart || null;
     this.interactableObjects = [];
     this.maxInteractDistance = 18;
     this.tweens = [];
@@ -461,7 +463,8 @@ export class RelicPavilion {
       mk(d.back, Math.PI);
       this.addInteractive(frame, `relic:${d.id}:flip`, `Flip ${d.label}`);
 
-      this.makeButton('BUY', d.color, d.x, 0.97, 0.56, `relic:${d.id}:link`, `Open ${d.label} on Rarible`, 0.46, 0.2);
+      this.makeButton('BUY', d.color, d.x - 0.22, 0.97, 0.56, `relic:${d.id}:link`, `Open ${d.label} on Rarible`, 0.38, 0.2);
+      this.makeButton('CART', 0x00f0ff, d.x + 0.22, 0.97, 0.56, `relic:${d.id}:cart`, `Add ${d.label} (#${d.token}) to NFT Cart`, 0.38, 0.2);
       this.cards[d.id] = { ...d, holder, angle: 0, flipped: false, flipTween: { v: 0 } };
     });
 
@@ -715,6 +718,7 @@ export class RelicPavilion {
         this.addInteractive(face, `relic:${m.id}:flip`, `Flip the ${m.label} medallion`);
       });
       this.addInteractive(body, `relic:${m.id}:flip`, `Flip the ${m.label} medallion`);
+      this.makeButton('WISH', m.color, m.x, 0.94, 0.52, `relic:${m.id}:wish`, `Throw $0.25 Wish on 2 oz ${m.label} Medallion (50% Yield Pool + Spot Win Roll)`, 0.48, 0.22);
       this.coins[m.id] = { ...m, holder, angle: 0, flipped: false, flipTween: { v: 0 } };
     });
 
@@ -726,13 +730,13 @@ export class RelicPavilion {
     const last = this.state.lastMedal;
     const names = { gold: 'GOLD', silver: 'SILVER', copper: 'COPPER' };
     this.updatePanel('medals', {
-      kicker: 'GOOD FAITH PARADIGM RAFFLE',
+      kicker: 'THEOPHANY WISHING WELL ($0.25 / WISH)',
       title: '2 oz Gold, Silver & Copper',
       lines: [
-        'Front: IN GOD WE TRUST 2013.  Back: 11 11.',
-        'Raffle entry comes with each Harps of God NFT.'
+        '50% Yield Pool ($0.125) + 50% Spot Metal Pool ($0.125).',
+        'Claim Cash, Base Swap (PAXG/KAG/COPXON), or Physical Mail.'
       ],
-      status: last ? `${names[last]}: ${this.state.medals[last] ? 'REVERSE' : 'OBVERSE'}` : 'CLICK A COIN TO FLIP'
+      status: last ? `${names[last]}: ${this.state.medals[last] ? 'REVERSE' : 'OBVERSE'} | CLICK WISH` : 'CLICK COIN TO FLIP OR WISH'
     });
   }
 
@@ -764,10 +768,34 @@ export class RelicPavilion {
 
   runCommand(id, cmd) {
     if (id === 'plate3' && cmd === 'toggle') this.setPlate3Covered(!this.state.plate3Covered);
+    else if (id === 'harps_gold' || (this.cards[id] && id === 'yellow')) {
+      if (cmd === 'flip') this.flipCard('yellow');
+      else if (cmd === 'link' || cmd === 'cart') {
+        if (this.onAddCardToCart) this.onAddCardToCart('492856');
+        else this.onOpenLink(RARIBLE + '492856');
+      }
+    }
+    else if (id === 'harps_green' || (this.cards[id] && id === 'green')) {
+      if (cmd === 'flip') this.flipCard('green');
+      else if (cmd === 'link' || cmd === 'cart') {
+        if (this.onAddCardToCart) this.onAddCardToCart('490643');
+        else this.onOpenLink(RARIBLE + '490643');
+      }
+    }
     else if (this.cards[id] && cmd === 'flip') this.flipCard(id);
-    else if (this.cards[id] && cmd === 'link') this.onOpenLink(RARIBLE + this.cards[id].token);
+    else if (this.cards[id] && (cmd === 'link' || cmd === 'cart')) {
+      if (this.onAddCardToCart) this.onAddCardToCart(this.cards[id].token);
+      else this.onOpenLink(RARIBLE + this.cards[id].token);
+    }
     else if (id === 'sphinx' && cmd === 'count') this.startSphinxCount();
-    else if (this.coins[id] && cmd === 'flip') this.flipCoin(id);
+    else if (id === 'coin' && (cmd === 'gold' || cmd === 'silver' || cmd === 'copper')) {
+      if (this.coins[cmd]) this.flipCoin(cmd);
+      if (this.onWishMedallion) this.onWishMedallion(cmd);
+    }
+    else if (this.coins[id] && (cmd === 'flip' || cmd === 'wish')) {
+      this.flipCoin(id);
+      if (this.onWishMedallion) this.onWishMedallion(id);
+    }
   }
 
   // World position the docent should stand at for a cluster

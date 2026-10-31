@@ -256,9 +256,9 @@ export class MobilityManager {
       const forwardDir = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.heading);
       this.roverGroup.position.addScaledVector(forwardDir, this.speed * delta);
 
-      // Clamp rover position within the Entertainment Boulevard corridor
+      // Clamp rover position within the Entertainment Boulevard corridor (outside club walls)
       this.roverGroup.position.x = Math.max(-14.0, Math.min(14.0, this.roverGroup.position.x));
-      this.roverGroup.position.z = Math.max(-148.0, Math.min(10.0, this.roverGroup.position.z));
+      this.roverGroup.position.z = Math.max(-148.0, Math.min(-26.0, this.roverGroup.position.z));
       this.roverGroup.position.y = 5.2; // ground deck level
     }
 
