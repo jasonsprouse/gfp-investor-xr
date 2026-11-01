@@ -17,8 +17,14 @@
       }
     });
     window.addEventListener('unhandledrejection', function(e) {
-      var stack = e.reason ? String(e.reason.stack || e.reason) : String(e);
+      var reason = e.reason;
+      var name = reason && reason.name ? String(reason.name) : '';
+      var stack = reason ? String(reason.stack || reason.message || reason) : String(e);
       if (stack.indexOf('extension://') >= 0) return; // browser-extension noise (e.g. wallets)
+      if (name === 'SecurityError' || /pointer\s*lock|exited the lock/i.test(stack)) {
+        if (e.preventDefault) e.preventDefault();
+        return;
+      }
       console.error(e);
       var box = document.getElementById('debug-error-box');
       if (box) {
@@ -209,6 +215,6 @@
   </div>
 
   <!-- Application Bootstrap -->
-  <script type="module" src="js/main.js?v=2.6"></script>
+  <script type="module" src="js/main.js?v=2.7"></script>
 </body>
 </html>

@@ -167,8 +167,28 @@ class App {
     );
   }
 
+  async safeLockPointer(element = document.body) {
+    if (!element || typeof element.requestPointerLock !== 'function') return;
+    if (document.pointerLockElement) return;
+    if (performance.now() - (this.lastUnlockTime || 0) <= 1300) return;
+    try {
+      await Promise.resolve(element.requestPointerLock());
+    } catch (err) {
+      if (err && err.name !== 'SecurityError' && err.name !== 'NotAllowedError') {
+        console.error('Pointer lock error:', err);
+      }
+    }
+  }
+
   initDesktopControls() {
     this.controls = new PointerLockControls(this.camera, document.body);
+    this.lastUnlockTime = 0;
+
+    // Override Three.js PointerLockControls.lock() so the returned Promise is always caught
+    this.controls.lock = () => {
+      this.safeLockPointer(this.controls.domElement);
+    };
+
     this.moveForward = false;
     this.moveBackward = false;
     this.moveLeft = false;
@@ -179,11 +199,22 @@ class App {
 
     const reticle = document.getElementById('reticle');
 
-    // Click canvas to lock pointer
-    this.container.addEventListener('click', () => {
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement) {
+        this.lastUnlockTime = performance.now();
+      }
+    });
+
+    // Click canvas to lock pointer (debounced after Escape cooldown)
+    this.container.addEventListener('click', (e) => {
+      if (e.target && e.target.closest && e.target.closest('#hud-overlay, #instructions-modal, #stage-video-frame, #debug-error-box')) {
+        return;
+      }
       if (this.docent) this.docent.unlockVoice();
       if (!this.renderer.xr.isPresenting && !this.controls.isLocked) {
-        this.controls.lock();
+        if (!document.pointerLockElement && performance.now() - this.lastUnlockTime > 1300) {
+          this.safeLockPointer(this.controls.domElement);
+        }
       } else if (this.controls.isLocked) {
         this.performDesktopRaycast();
       }
@@ -194,6 +225,7 @@ class App {
     });
 
     this.controls.addEventListener('unlock', () => {
+      this.lastUnlockTime = performance.now();
       reticle.style.display = 'none';
     });
 
@@ -603,35 +635,41 @@ class App {
     document.getElementById('btn-video-hide')?.addEventListener('click', () => setVideoMode('hidden'));
 
     // Start / Dismiss modal
-    startBtn?.addEventListener('click', () => {
+    startBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
       modal?.classList.add('hidden');
       if (this.docent) this.docent.unlockVoice();
       this.selectTrack(0);
-      this.controls.lock();
+      this.safeLockPointer(this.controls.domElement);
       setTimeout(() => this.docent && this.docent.greet(), 1800);
     });
 
     // Player Controls
-    playBtn?.addEventListener('click', () => this.handleAction('play'));
-    prevBtn?.addEventListener('click', () => this.handleAction('prev'));
-    nextBtn?.addEventListener('click', () => this.handleAction('next'));
+    playBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.handleAction('play'); });
+    prevBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.handleAction('prev'); });
+    nextBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.handleAction('next'); });
 
+    volSlider?.addEventListener('click', (e) => e.stopPropagation());
     volSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
       this.audioManager.setVolume(parseInt(e.target.value));
     });
 
     // FX Controls
-    laserBtn?.addEventListener('click', () => {
+    laserBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
       this.clubScene.lasersEnabled = !this.clubScene.lasersEnabled;
       laserBtn.classList.toggle('active', this.clubScene.lasersEnabled);
     });
 
-    strobeBtn?.addEventListener('click', () => {
+    strobeBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
       this.clubScene.strobesEnabled = !this.clubScene.strobesEnabled;
       strobeBtn.classList.toggle('active', this.clubScene.strobesEnabled);
     });
 
-    modeBtn?.addEventListener('click', () => {
+    modeBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
       this.clubScene.visualizerMode = (this.clubScene.visualizerMode + 1) % 2;
       modeBtn.innerHTML = `<i class="fas fa-sliders-h"></i> ${this.clubScene.visualizerMode === 0 ? 'Mode: Spectrum' : 'Mode: Tunnel'}`;
     });
@@ -639,6 +677,7 @@ class App {
     // View Presets
     document.querySelectorAll('.btn-preset').forEach((btn) => {
       btn?.addEventListener('click', (e) => {
+        e.stopPropagation();
         const view = e.currentTarget.getAttribute('data-view');
         if (view === 'vrmenu') {
           this.handleAction('vr:toggle_menu');
@@ -646,6 +685,11 @@ class App {
           this.teleportToPreset(view);
         }
       });
+    });
+
+    // Stop click propagation on HUD containers so UI clicks never bubble to the 3D canvas
+    document.querySelectorAll('.hud-header, .hud-bottom, #playlist-drawer, #stage-video-frame').forEach((el) => {
+      el?.addEventListener('click', (e) => e.stopPropagation());
     });
 
     // Initialize Web3 Monetization Layer (HTTP 402, Rarible NFT Basket, Wishing Well, Subscriptions)
