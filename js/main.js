@@ -52,7 +52,7 @@ class App {
     // 3. Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
     this.renderer.shadowMap.enabled = false;
@@ -73,8 +73,11 @@ class App {
       unlockVRVoice();
       document.getElementById('hud-overlay').style.display = 'none';
       document.getElementById('instructions-modal').classList.add('hidden');
+      if (this.boothManager) this.boothManager.refreshAllScreens();
+      if (this.adventureKiosk) this.adventureKiosk.renderSlide(this.adventureKiosk.currentSlide);
       setTimeout(() => {
         unlockVRVoice();
+        if (this.boothManager) this.boothManager.refreshAllScreens();
         if (this.docent) this.docent.greet(true);
       }, 1200);
     });
@@ -96,7 +99,6 @@ class App {
     this.vtolManager = new VTOLManager(this.scene);
     this.mobilityManager = new MobilityManager(this.scene);
     this.boothManager = new BoothManager(this.scene, {
-      audioManager: this.audioManager,
       onNarrationChange: (active) => this.setVoiceSource('booth', active),
       onOpenLink: (url) => this.openBoothLink(url),
       onNotify: (msg) => this.showHUDNotification(msg)
@@ -121,7 +123,6 @@ class App {
     this.adventureKiosk = new AdventureKiosk(this.scene, {
       position: [9.0, 30.0, 14.5],
       rotY: -Math.PI / 10,
-      audioManager: this.audioManager,
       onOpenLink: (url) => this.openBoothLink(url),
       onNotify: (msg) => this.showHUDNotification(msg),
       onNarrationChange: (active) => this.setVoiceSource('adventure', active)
@@ -307,9 +308,20 @@ class App {
     }
   }
 
+  getPlayerWorldPos() {
+    if (this.renderer && this.renderer.xr && this.renderer.xr.isPresenting) {
+      const p = new THREE.Vector3();
+      this.camera.getWorldPosition(p);
+      p.y = this.dolly.position.y;
+      return p;
+    }
+    return this.dolly.position;
+  }
+
   handleAction(action) {
     if (this.audioManager) this.audioManager.resumeAudioContext();
     if (this.docent) this.docent.unlockVoice();
+    const playerPos = this.getPlayerWorldPos();
 
     if (typeof action === 'string' && action.startsWith('teleport:')) {
       const targetView = action.slice('teleport:'.length);
@@ -330,25 +342,36 @@ class App {
       }
       if (vrCmd === 'cycle_booth') {
         const boothIds = ['booth:prismatic', 'booth:harps', 'booth:archive', 'booth:collector'];
-        this._vrBoothCycleIdx = ((this._vrBoothCycleIdx || 0) + 1) % boothIds.length;
+        if (typeof this._vrBoothCycleIdx !== 'number') {
+          this._vrBoothCycleIdx = 0;
+        } else {
+          this._vrBoothCycleIdx = (this._vrBoothCycleIdx + 1) % boothIds.length;
+        }
         const target = boothIds[this._vrBoothCycleIdx];
         this.teleportToPreset(target);
         return;
       }
       if (vrCmd === 'docent_explain') {
-        if (this.docent) this.docent.explainNearest(this.dolly.position);
+        if (this.docent) this.docent.explainNearest(playerPos);
         return;
       }
       if (vrCmd === 'booth_prev' || vrCmd === 'booth_next' || vrCmd === 'booth_narrate' || vrCmd === 'booth_view') {
-        const advDist = this.adventureKiosk ? Math.hypot(this.dolly.position.x - 9.0, this.dolly.position.z - 14.5) : 999;
-        const nearBooth = this.boothManager ? this.boothManager.getNearbyBooth(this.dolly.position, 40) : null;
-        const boothDist = nearBooth ? this.dolly.position.distanceTo(nearBooth.worldPos) : 999;
+        const advDist = this.adventureKiosk ? Math.hypot(playerPos.x - 9.0, playerPos.z - 14.5) : 999;
+        let nearBooth = this.boothManager ? this.boothManager.getNearbyBooth(playerPos, 9.5) : null;
+        if (!nearBooth && this.boothManager && this._activeBoothId) {
+          nearBooth = this.boothManager.getBooth(this._activeBoothId);
+        }
+        if (!nearBooth && this.boothManager) {
+          nearBooth = this.boothManager.getNearbyBooth(playerPos, 40);
+        }
+        const boothDist = nearBooth ? playerPos.distanceTo(nearBooth.worldPos) : 999;
         if (this.adventureKiosk && advDist < 6.5 && advDist < boothDist) {
           if (vrCmd === 'booth_prev') this.adventureKiosk.prev();
           else if (vrCmd === 'booth_next') this.adventureKiosk.next();
           else if (vrCmd === 'booth_narrate') this.adventureKiosk.toggleAudio();
           else if (vrCmd === 'booth_view') this.adventureKiosk.toggleAutoplay();
         } else if (nearBooth && this.boothManager) {
+          this._activeBoothId = nearBooth.def.id;
           const mapCmd = { booth_prev: 'prev', booth_next: 'next', booth_narrate: 'toggle', booth_view: 'view' }[vrCmd];
           this.boothManager.runCommand(nearBooth, mapCmd);
         } else {
@@ -358,19 +381,23 @@ class App {
       }
     }
     if (typeof action === 'string' && (action.startsWith('adventure:') || action.startsWith('adventure_'))) {
-      if (this.adventureKiosk) this.adventureKiosk.handleAction(action, this.dolly.position);
+      if (this.adventureKiosk) this.adventureKiosk.handleAction(action, playerPos);
       return;
     }
     if (typeof action === 'string' && action.startsWith('relic:')) {
-      if (this.relicPavilion) this.relicPavilion.handleAction(action, this.dolly.position);
+      if (this.relicPavilion) this.relicPavilion.handleAction(action, playerPos);
       return;
     }
     if (typeof action === 'string' && action.startsWith('docent:')) {
-      if (this.docent) this.docent.handleAction(action, this.dolly.position);
+      if (this.docent) this.docent.handleAction(action, playerPos);
       return;
     }
     if (typeof action === 'string' && action.startsWith('booth:')) {
-      if (this.boothManager) this.boothManager.handleAction(action, this.dolly.position);
+      if (this.boothManager) {
+        const parts = action.split(':');
+        if (parts[1]) this._activeBoothId = parts[1];
+        this.boothManager.handleAction(action, playerPos);
+      }
       return;
     }
     if (action === 'play' || action === 'toggleVideo') {
@@ -641,16 +668,28 @@ class App {
     };
   }
 
-  orientPlayerLookAt(x, y, z) {
+  placeAndLookAt(standX, standY, standZ, lookX, lookY, lookZ) {
     if (this.renderer && this.renderer.xr && this.renderer.xr.isPresenting) {
-      // In WebXR, mutating camera rotation fights the headset pose tracker and causes jitter.
-      // Rotate the dolly rig around Y instead.
-      const dx = x - this.dolly.position.x;
-      const dz = z - this.dolly.position.z;
-      this.dolly.rotation.y = Math.atan2(-dx, -dz);
+      // Align dolly yaw so the user's current headset gaze faces (lookX, lookZ),
+      // and compensate for room-scale XZ offset so the headset lands at (standX, standZ).
+      const localFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      const headLocalYaw = Math.atan2(-localFwd.x, -localFwd.z);
+      const desiredWorldYaw = Math.atan2(-(lookX - standX), -(lookZ - standZ));
+      const newDollyYaw = desiredWorldYaw - headLocalYaw;
+      this.dolly.rotation.y = newDollyYaw;
+
+      const cx = this.camera.position.x;
+      const cz = this.camera.position.z;
+      const cosY = Math.cos(newDollyYaw);
+      const sinY = Math.sin(newDollyYaw);
+      const worldOffsetX = cx * cosY + cz * sinY;
+      const worldOffsetZ = -cx * sinY + cz * cosY;
+      this.dolly.position.set(standX - worldOffsetX, standY, standZ - worldOffsetZ);
     } else {
       this.dolly.rotation.y = 0;
-      this.camera.lookAt(x, y, z);
+      this.dolly.position.set(standX, standY, standZ);
+      this.dolly.updateMatrixWorld(true);
+      this.camera.lookAt(lookX, lookY, lookZ);
     }
   }
 
@@ -662,52 +701,43 @@ class App {
     if (view && view.startsWith('booth:') && this.boothManager) {
       const booth = this.boothManager.getBooth(view.split(':')[1]);
       if (booth) {
+        this._activeBoothId = booth.def.id;
         const stand = this.boothManager.getStandPoint(booth);
-        this.dolly.position.set(stand.x, 30.0, stand.z);
         const look = booth.group.localToWorld(new THREE.Vector3(0, 2.1, -1.9));
-        this.orientPlayerLookAt(look.x, look.y, look.z);
+        this.placeAndLookAt(stand.x, 30.0, stand.z, look.x, look.y, look.z);
+        this.boothManager.composeSlide(booth);
+        booth.screenTex.needsUpdate = true;
         this.showHUDNotification(`Teleported to ${booth.def.title}`);
       }
       return;
     }
 
     if (view === 'adventure') {
-      this.dolly.position.set(7.5, 30.0, 18.0);
-      this.orientPlayerLookAt(9.0, 31.8, 14.2);
+      this.placeAndLookAt(7.5, 30.0, 18.0, 9.0, 31.8, 14.2);
     } else if (view === 'skyport') {
-      this.dolly.position.set(0, 30.0, 22);
-      this.orientPlayerLookAt(0, 34.0, 12);
+      this.placeAndLookAt(0, 30.0, 22, 0, 34.0, 12);
     } else if (view === 'relics') {
-      this.dolly.position.set(0, 30.0, 22.4);
-      this.orientPlayerLookAt(0, 31.3, 28.5);
+      this.placeAndLookAt(0, 30.0, 22.4, 0, 31.3, 28.5);
     } else if (view === 'docent') {
-      this.dolly.position.set(0, 30.0, 20.6);
-      this.orientPlayerLookAt(0.6, 31.3, 16.0);
+      this.placeAndLookAt(0, 30.0, 20.6, 0.6, 31.3, 16.0);
     } else if (view === 'vtol') {
       this.handleAction('board_vtol');
     } else if (view === 'vertiport') {
-      this.dolly.position.set(0, 5.2, -135);
-      this.orientPlayerLookAt(0, 5.2, -50);
+      this.placeAndLookAt(0, 5.2, -135, 0, 5.2, -50);
     } else if (view === 'rover') {
       this.handleAction('board_rover');
     } else if (view === 'floor') {
-      this.dolly.position.set(0, 0, 3);
-      this.orientPlayerLookAt(0, 2, -14);
+      this.placeAndLookAt(0, 0, 3, 0, 2, -14);
     } else if (view === 'dj') {
-      this.dolly.position.set(0, 1.1, -13.5);
-      this.orientPlayerLookAt(0, 2, 8);
+      this.placeAndLookAt(0, 1.1, -13.5, 0, 2, 8);
     } else if (view === 'amphi') {
-      this.dolly.position.set(24, 0, 12);
-      this.orientPlayerLookAt(24, 2, 0);
+      this.placeAndLookAt(24, 0, 12, 24, 2, 0);
     } else if (view === 'showroom') {
-      this.dolly.position.set(-24, 0, 12);
-      this.orientPlayerLookAt(-24, 2, 0);
+      this.placeAndLookAt(-24, 0, 12, -24, 2, 0);
     } else if (view === 'lounge') {
-      this.dolly.position.set(-9, 0, 6);
-      this.orientPlayerLookAt(0, 1.5, -5);
+      this.placeAndLookAt(-9, 0, 6, 0, 1.5, -5);
     } else if (view === 'bar') {
-      this.dolly.position.set(9, 0, 4);
-      this.orientPlayerLookAt(12, 1.5, 4);
+      this.placeAndLookAt(9, 0, 4, 12, 1.5, 4);
     }
   }
 
@@ -807,20 +837,17 @@ class App {
         this.npcManager.update(delta, t, this.audioManager);
       }
 
-      // Update Skyport Exhibits only when on the Skyport deck
-      if (onSkyport) {
-        if (this.relicPavilion) {
-          this.relicPavilion.update(delta, t);
-        }
-        if (this.docent) {
-          this.docent.update(delta, t, this.dolly.position);
-        }
-        if (this.boothManager) {
-          this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
-        }
-        if (this.adventureKiosk) {
-          this.adventureKiosk.update(delta, t);
-        }
+      if (this.relicPavilion) {
+        this.relicPavilion.update(delta, t);
+      }
+      if (this.docent) {
+        this.docent.update(delta, t, this.dolly.position);
+      }
+      if (this.boothManager) {
+        this.boothManager.update(delta, t, this.dolly.position, this.audioManager);
+      }
+      if (this.adventureKiosk) {
+        this.adventureKiosk.update(delta, t);
       }
       if (this.vtolManager) {
         const vtolThrust = (this.moveForward || this.isAscending);

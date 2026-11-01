@@ -35,15 +35,14 @@ function wrapText(ctx, text, maxWidth) {
  * Actions are routed through `handleAction('booth:<id>:<command>')`.
  */
 export class BoothManager {
-  constructor(scene, { audioManager, onNarrationChange, onOpenLink, onNotify } = {}) {
+  constructor(scene, { onNarrationChange, onOpenLink, onNotify } = {}) {
     this.scene = scene;
-    this.audioManager = audioManager || null;
     this.onNarrationChange = onNarrationChange || (() => {});
     this.onOpenLink = onOpenLink || (() => {});
     this.onNotify = onNotify || (() => {});
     this.booths = [];
     this.interactableObjects = [];
-    this.maxInteractDistance = 35;
+    this.maxInteractDistance = 30;
     this.anyNarrating = false;
     this.imageCache = new Map();
 
@@ -221,7 +220,6 @@ export class BoothManager {
 
     this.drawCaption(booth);
     this.composeSlide(booth);
-    this.prefetch(booth);
     return booth;
   }
 
@@ -266,8 +264,14 @@ export class BoothManager {
     if (this.imageCache.has(url)) return this.imageCache.get(url);
     const p = new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => resolve(img);
+      if (/^https?:\/\//i.test(url)) img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        if (typeof img.decode === 'function') {
+          img.decode().then(() => resolve(img)).catch(() => resolve(img));
+        } else {
+          resolve(img);
+        }
+      };
       img.onerror = () => reject(new Error(`Failed to load ${url}`));
       img.src = url;
     });
@@ -313,6 +317,7 @@ export class BoothManager {
         const loaded = {};
         keys.forEach((k, i) => { loaded[k] = imgs[i]; });
         this.paintSlide(booth, loaded);
+        if (booth.hasImages) this.prefetch(booth);
       });
     // Immediate placeholder while images load
     if (!booth.painted) this.paintSlide(booth, {});
@@ -383,6 +388,8 @@ export class BoothManager {
 
   paintSlide(booth, imgs) {
     booth.painted = true;
+    const imgValues = Object.values(imgs);
+    booth.hasImages = imgValues.length > 0 && imgValues.every(Boolean);
     const ctx = booth.compCtx;
     const W = 1280;
     const H = 720;
@@ -517,52 +524,26 @@ export class BoothManager {
     if (!booth.def.narration) return;
     // Only one booth speaks at a time
     this.booths.forEach((b) => { if (b !== booth && b.narrating) this.stopNarration(b); });
-    if (booth._stopWebAudio) {
-      try { booth._stopWebAudio(); } catch (e) {}
-      booth._stopWebAudio = null;
-    }
-    const mp3Url = `${booth.def.mediaDir}/slide_${pad2(booth.index + 1)}.mp3`;
+    const audio = this.ensureAudio(booth);
+    audio.src = `${booth.def.mediaDir}/slide_${pad2(booth.index + 1)}.mp3`;
+    audio.volume = 1;
     booth.narrating = true;
     this.drawLabel(booth, 'toggle', 'PAUSE');
     this.drawCaption(booth);
     this.refreshNarrationState();
-
-    const playHtmlFallback = () => {
-      const audio = this.ensureAudio(booth);
-      audio.src = mp3Url;
-      audio.volume = 1;
-      const p = audio.play();
-      if (p && p.catch) {
-        p.catch(() => {
-          booth.narrating = false;
-          this.drawLabel(booth, 'toggle', 'PLAY');
-          this.drawCaption(booth);
-          this.refreshNarrationState();
-        });
-      }
-    };
-
-    if (this.audioManager && typeof this.audioManager.playVoiceFile === 'function') {
-      booth._stopWebAudio = this.audioManager.playVoiceFile(mp3Url, {
-        onEnded: () => {
-          booth._stopWebAudio = null;
-          this.onNarrationEnded(booth);
-        },
-        onError: () => {
-          booth._stopWebAudio = null;
-          playHtmlFallback();
-        }
+    const p = audio.play();
+    if (p && p.catch) {
+      p.catch(() => {
+        booth.narrating = false;
+        this.drawLabel(booth, 'toggle', 'PLAY');
+        this.drawCaption(booth);
+        this.refreshNarrationState();
+        this.onNotify('Narration blocked by the browser - click ENTER first, then press PLAY again');
       });
-    } else {
-      playHtmlFallback();
     }
   }
 
   stopNarration(booth) {
-    if (booth._stopWebAudio) {
-      try { booth._stopWebAudio(); } catch (e) {}
-      booth._stopWebAudio = null;
-    }
     if (booth.audio) booth.audio.pause();
     booth.narrating = false;
     if (booth.def.narration) this.drawLabel(booth, 'toggle', 'PLAY');
@@ -700,10 +681,28 @@ export class BoothManager {
     return mesh.getWorldPosition(out);
   }
 
+  refreshAllScreens() {
+    this.booths.forEach((b) => {
+      this.drawCaption(b);
+      this.composeSlide(b);
+      b.screenTex.needsUpdate = true;
+      b.captionTex.needsUpdate = true;
+    });
+  }
+
   update(delta, time, playerPos, audioManager) {
     const pulse = audioManager && audioManager.getBeatPulse ? audioManager.getBeatPulse() : 0;
     this.booths.forEach((b) => {
       b.haloMat.opacity = 0.3 + pulse * 0.3 + (b.narrating ? 0.12 : 0);
+
+      // Retry composing if initial slide image load had not completed yet
+      if (!b.hasImages) {
+        b.retryTimer = (b.retryTimer || 0) + delta;
+        if (b.retryTimer >= 1.5) {
+          b.retryTimer = 0;
+          this.composeSlide(b);
+        }
+      }
 
       // Timed slide show for self-guided booths (only while a visitor is nearby)
       if (!b.def.narration && b.autoplay && b.def.autoMs && b.data.length > 1) {

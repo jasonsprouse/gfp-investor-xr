@@ -492,28 +492,15 @@ export class XRControllerManager {
     }
   }
 
-  getVisibleInteractables(controllerIndex) {
-    const isLeftWristOwner = (controllerIndex === 1);
-    const out = [];
-    const list = this.interactableObjects;
-    for (let i = 0; i < list.length; i++) {
-      const obj = list[i];
-      if (!obj || !obj.visible) continue;
-      if (isLeftWristOwner && this.wristMeshes.has(obj)) continue;
-      out.push(obj);
-    }
-    return out;
-  }
-
   onSelectStart(controller) {
     controller.userData.isSelecting = true;
     this.tempMatrix.identity().extractRotation(controller.matrixWorld);
     this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-    this.raycaster.far = 35;
+    this.raycaster.far = 50; // Extend raycast range to 50 meters
 
-    const candidates = this.getVisibleInteractables(controller.userData.index);
-    const intersects = this.raycaster.intersectObjects(candidates, true);
+    // Check interaction with in-room video screen, DJ buttons, booths, or handheld remote
+    const intersects = this.raycaster.intersectObjects(this.interactableObjects, true);
     if (intersects.length > 0) {
       const hit = intersects[0].object;
       this.triggerHaptic(controller.userData.index);
@@ -572,34 +559,29 @@ export class XRControllerManager {
       this.renderHandheldRemote(videoTitle, isPlaying, playerState);
     }
 
-    // 2. Throttled Dynamic Laser Pointer & Target Reticle (runs every 3rd frame to eliminate 90Hz raycast jitter)
-    this._raycastFrame = (this._raycastFrame + 1) % 3;
-    if (this._raycastFrame === 0) {
-      const candidates0 = this.getVisibleInteractables(0);
-      const candidates1 = this.getVisibleInteractables(1);
-      this.controllers.forEach((c, idx) => {
-        this.tempMatrix.identity().extractRotation(c.controller.matrixWorld);
-        this.raycaster.ray.origin.setFromMatrixPosition(c.controller.matrixWorld);
-        this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-        this.raycaster.far = 30;
+    // 2. Continuous Dynamic Laser Pointer & Screen Target Reticle
+    this.controllers.forEach((c) => {
+      this.tempMatrix.identity().extractRotation(c.controller.matrixWorld);
+      this.raycaster.ray.origin.setFromMatrixPosition(c.controller.matrixWorld);
+      this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+      this.raycaster.far = 50;
 
-        const hitInteractables = this.raycaster.intersectObjects(idx === 1 ? candidates1 : candidates0, true);
-        if (hitInteractables.length > 0) {
-          const hit = hitInteractables[0];
-          c.laser.scale.z = hit.distance;
-          c.reticle.position.copy(hit.point);
-          if (hit.face) {
-            c.reticle.quaternion.setFromUnitVectors(this._zAxis, hit.face.normal);
-          }
-          c.reticle.visible = true;
-          c.laser.material.color.setHex(0xff007f);
-        } else {
-          c.reticle.visible = false;
-          c.laser.scale.z = 18;
-          c.laser.material.color.setHex(c.defaultColor);
+      const hitInteractables = this.raycaster.intersectObjects(this.interactableObjects, true);
+      if (hitInteractables.length > 0) {
+        const hit = hitInteractables[0];
+        c.laser.scale.z = hit.distance;
+        c.reticle.position.copy(hit.point);
+        if (hit.face) {
+          c.reticle.quaternion.setFromUnitVectors(this._zAxis, hit.face.normal);
         }
-      });
-    }
+        c.reticle.visible = true;
+        c.laser.material.color.setHex(0xff007f);
+      } else {
+        c.reticle.visible = false;
+        c.laser.scale.z = 25;
+        c.laser.material.color.setHex(c.defaultColor);
+      }
+    });
 
     // 3. Hardware Gamepad Buttons directly controlling video screen & vehicles
     for (const source of session.inputSources) {
