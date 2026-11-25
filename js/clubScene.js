@@ -526,6 +526,7 @@ export class ClubScene {
     const v = this.videoPlaylist[this.currentVideoIdx];
 
     if (!this.roomVideo.src.endsWith(v.file)) {
+      this.roomVideo.pause();
       this.roomVideo.src = v.file;
       this.roomVideo.load();
     }
@@ -787,13 +788,19 @@ export class ClubScene {
       this.skyportHaloMat.opacity = 0.35 + pulse * 0.45;
     }
 
-    if (this.screenMat && this.screenMat.map === this.screenTexture) {
-      this.renderBigScreen(time, audioManager);
+    // When the visitor is up on the Skyport deck (Y >= 20), skip updating the indoor club 30m below
+    // and hide the indoor cinema screen mesh so Three.js avoids per-frame VideoTexture GPU uploads
+    // that compete with Web Audio decoding while music continues playing.
+    const onSkyport = playerY >= 20.0;
+    if (this.screenMesh) {
+      this.screenMesh.visible = !onSkyport;
+    }
+    if (onSkyport) {
+      return;
     }
 
-    // When the visitor is up on the Skyport deck (Y >= 20), skip updating the indoor club 30m below
-    if (playerY >= 20.0) {
-      return;
+    if (this.screenMat && this.screenMat.map === this.screenTexture) {
+      this.renderBigScreen(time, audioManager);
     }
 
     const bass = audioManager ? audioManager.getBass() : 0;

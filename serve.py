@@ -92,6 +92,70 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
 
+    def _serve_range_file(self, path, range_header):
+        if not os.path.isfile(path):
+            return False
+        try:
+            file_size = os.path.getsize(path)
+        except OSError:
+            return False
+        if file_size == 0:
+            return False
+
+        spec = range_header.strip()
+        if not spec.lower().startswith('bytes='):
+            return False
+        first_range = spec[6:].split(',')[0].strip()
+        if '-' not in first_range:
+            return False
+
+        start_str, end_str = first_range.split('-', 1)
+        try:
+            if start_str == '':
+                suffix = int(end_str)
+                if suffix <= 0:
+                    raise ValueError('Invalid suffix range')
+                start = max(0, file_size - suffix)
+                end = file_size - 1
+            else:
+                start = int(start_str)
+                end = int(end_str) if end_str != '' else file_size - 1
+        except ValueError:
+            self.send_response(416)
+            self.send_header('Content-Range', f'bytes */{file_size}')
+            self.end_headers()
+            return True
+
+        if start < 0 or start >= file_size or end < start:
+            self.send_response(416)
+            self.send_header('Content-Range', f'bytes */{file_size}')
+            self.end_headers()
+            return True
+
+        end = min(end, file_size - 1)
+        length = end - start + 1
+        ctype = self.guess_type(path)
+
+        self.send_response(206)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+        self.send_header('Content-Length', str(length))
+        self.end_headers()
+
+        try:
+            with open(path, 'rb') as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        return True
+
     def do_GET(self):
         if self._is_api_request():
             import backend.api_handler
@@ -99,6 +163,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif self._is_dotfile_path():
             self.send_error(404, "File not found")
         else:
+            range_header = self.headers.get('Range')
+            if range_header:
+                local_path = self.translate_path(self.path)
+                if self._serve_range_file(local_path, range_header):
+                    return
             super().do_GET()
 
     def do_HEAD(self):

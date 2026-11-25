@@ -526,7 +526,7 @@ export class BoothManager {
     this.booths.forEach((b) => { if (b !== booth && b.narrating) this.stopNarration(b); });
     const audio = this.ensureAudio(booth);
     audio.src = `${booth.def.mediaDir}/slide_${pad2(booth.index + 1)}.mp3`;
-    audio.volume = 1;
+    audio.volume = 0.85;
     booth.narrating = true;
     this.drawLabel(booth, 'toggle', 'PAUSE');
     this.drawCaption(booth);
@@ -719,7 +719,7 @@ export class BoothManager {
           this.stopNarration(b);
           return;
         }
-        b.audio.volume = THREE.MathUtils.clamp(1 - (d - 5) / 22, 0.2, 1);
+        b.audio.volume = THREE.MathUtils.clamp(1 - (d - 5) / 22, 0.2, 0.85);
       }
     });
   }

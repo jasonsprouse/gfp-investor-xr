@@ -814,7 +814,7 @@ export class AdventureKiosk {
       };
       this.voiceAudio.src = `media/docent/${key}.wav`;
       this.voiceAudio.currentTime = 0;
-      this.voiceAudio.volume = 1.0;
+      this.voiceAudio.volume = 0.85;
       const p = this.voiceAudio.play();
       if (p && typeof p.catch === 'function') {
         p.catch(() => {

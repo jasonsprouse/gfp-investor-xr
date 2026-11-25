@@ -26,10 +26,16 @@ export class AudioManager {
     this.ytPlayer = null;
     this.ytReady = false;
 
-    // Web Audio Visualizer Analyzer
+    // Web Audio Visualizer Analyzer & Anti-Clipping Mastering Chain
     this.audioCtx = null;
     this.analyser = null;
+    this.masterLimiter = null;
+    this.masterGain = null;
+    this.videoFilter = null;
+    this.videoGain = null;
     this.voiceGain = null;
+    this.videoMaxGain = 0.65;
+    this.duckFactor = 0.16;
     this.voiceBufferCache = new Map();
     this.activeVoiceSource = null;
     this._unlockedBuffer = false;
@@ -106,19 +112,43 @@ export class AudioManager {
   initWebAudio() {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
-    this.audioCtx = new AudioContext();
+    // Use 'playback' latencyHint for a larger hardware buffer to prevent
+    // audio buffer-underrun crackling/clipping under WebGL/WebXR video load.
+    try {
+      this.audioCtx = new AudioContext({ latencyHint: 'playback' });
+    } catch (e) {
+      this.audioCtx = new AudioContext();
+    }
+
+    const now = this.audioCtx.currentTime;
+
+    // Master soft-knee brickwall limiter + headroom ceiling (< -1.4 dBFS)
+    // Prevents digital clipping across hot-mastered video tracks and voice narration.
+    this.masterLimiter = this.audioCtx.createDynamicsCompressor();
+    this.masterLimiter.threshold.setValueAtTime(-10, now);
+    this.masterLimiter.knee.setValueAtTime(14, now);
+    this.masterLimiter.ratio.setValueAtTime(12, now);
+    this.masterLimiter.attack.setValueAtTime(0.003, now);
+    this.masterLimiter.release.setValueAtTime(0.15, now);
+
+    this.masterGain = this.audioCtx.createGain();
+    this.masterGain.gain.setValueAtTime(0.85, now);
+
+    this.masterLimiter.connect(this.masterGain);
+    this.masterGain.connect(this.audioCtx.destination);
+
     this.analyser = this.audioCtx.createAnalyser();
     this.analyser.fftSize = 128;
     this.analyser.smoothingTimeConstant = 0.8;
     this.frequencyData = new Uint8Array(this.analyser.frequencyBinCount);
     this.timeDomainData = new Uint8Array(this.analyser.frequencyBinCount);
 
-    this.analyser.connect(this.audioCtx.destination);
+    this.analyser.connect(this.masterLimiter);
 
-    // Dedicated voice narration channel routed directly to WebXR headset destination
+    // Dedicated voice narration channel routed through master limiter (no over-unity clipping)
     this.voiceGain = this.audioCtx.createGain();
-    this.voiceGain.gain.value = 1.35;
-    this.voiceGain.connect(this.audioCtx.destination);
+    this.voiceGain.gain.setValueAtTime(0.92, now);
+    this.voiceGain.connect(this.masterLimiter);
   }
 
   resumeAudioContext() {
@@ -269,20 +299,42 @@ export class AudioManager {
     };
   }
 
+  _computeVideoGain() {
+    const base = (this.volume / 100) * this.videoMaxGain;
+    return this.ducked ? base * this.duckFactor : base;
+  }
+
   attachRoomVideo(videoEl) {
     this.roomVideo = videoEl;
     if (!this.audioCtx) this.initWebAudio();
     if (!this.audioCtx) return;
     try {
       if (!this.videoMediaSource && videoEl) {
+        // Keep the HTMLMediaElement at unity once routed into Web Audio so videoGain
+        // is the single smooth gain control (avoids double-attenuation and click pops).
+        videoEl.volume = 1.0;
+        const now = this.audioCtx.currentTime;
         this.videoMediaSource = this.audioCtx.createMediaElementSource(videoEl);
+
+        // Gentle 28 Hz high-pass filter removes sub-audible DC rumble that triggers speaker/headset clipping
+        this.videoFilter = this.audioCtx.createBiquadFilter();
+        this.videoFilter.type = 'highpass';
+        this.videoFilter.frequency.setValueAtTime(28, now);
+        this.videoFilter.Q.setValueAtTime(0.7, now);
+
         this.videoGain = this.audioCtx.createGain();
-        this.videoGain.gain.setValueAtTime((this.volume / 100) * 0.9, this.audioCtx.currentTime);
-        this.videoMediaSource.connect(this.videoGain);
+        this.videoGain.gain.setValueAtTime(this._computeVideoGain(), now);
+
+        this.videoMediaSource.connect(this.videoFilter);
+        this.videoFilter.connect(this.videoGain);
         this.videoGain.connect(this.analyser);
       }
     } catch (e) {
       console.warn("MediaElementSource notice:", e);
+      // Fallback if MediaElementSource cannot attach
+      if (this.roomVideo) {
+        this.roomVideo.volume = Math.max(0, Math.min(1, this._computeVideoGain()));
+      }
     }
   }
 
@@ -325,25 +377,26 @@ export class AudioManager {
   setVolume(vol) {
     this.volume = Math.max(0, Math.min(100, vol));
     if (this.ytPlayer && this.ytReady) {
-      try { this.ytPlayer.setVolume(this.volume); } catch(e){}
-    }
-    if (this.roomVideo) {
-      this.roomVideo.volume = Math.max(0, Math.min(1, (this.volume / 100) * (this.ducked ? 0.18 : 1)));
+      try { this.ytPlayer.setVolume(Math.round(this.volume * 0.75)); } catch(e){}
     }
     if (this.videoGain && this.audioCtx) {
-      this.videoGain.gain.setValueAtTime((this.volume / 100) * 0.9 * (this.ducked ? 0.18 : 1), this.audioCtx.currentTime);
+      const now = this.audioCtx.currentTime;
+      this.videoGain.gain.cancelScheduledValues(now);
+      this.videoGain.gain.setTargetAtTime(this._computeVideoGain(), now, 0.025);
+    } else if (this.roomVideo) {
+      this.roomVideo.volume = Math.max(0, Math.min(1, this._computeVideoGain()));
     }
   }
 
   // Lower the club music while a booth or docent narration is playing
   setDucked(ducked) {
     this.ducked = !!ducked;
-    if (this.roomVideo) {
-      this.roomVideo.volume = Math.max(0, Math.min(1, (this.volume / 100) * (this.ducked ? 0.18 : 1)));
-    }
     if (this.videoGain && this.audioCtx) {
-      const base = (this.volume / 100) * 0.9;
-      this.videoGain.gain.setTargetAtTime(this.ducked ? base * 0.18 : base, this.audioCtx.currentTime, 0.25);
+      const now = this.audioCtx.currentTime;
+      this.videoGain.gain.cancelScheduledValues(now);
+      this.videoGain.gain.setTargetAtTime(this._computeVideoGain(), now, 0.2);
+    } else if (this.roomVideo) {
+      this.roomVideo.volume = Math.max(0, Math.min(1, this._computeVideoGain()));
     }
   }
 
@@ -368,7 +421,7 @@ export class AudioManager {
           bassSum += this.frequencyData[i];
         }
         const avgBass = bassSum / 4;
-        if (avgBass > 135 && performance.now() - this.lastBeatTime > 240) {
+        if (avgBass > 115 && performance.now() - this.lastBeatTime > 240) {
           this.lastBeatTime = performance.now();
         }
       }
